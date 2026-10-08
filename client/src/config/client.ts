@@ -23,4 +23,19 @@ export const CLIENT = {
   pingIntervalMs: 2000,
 };
 
+/**
+ * Runtime override from ./config.json next to index.html (static hosting such as
+ * GitHub Pages): lets the WebSocket URL change without rebuilding the client.
+ * Priority: ?server= param > config.json > VITE_WS_URL > same host.
+ */
+export async function loadRuntimeConfig(): Promise<void> {
+  if (params.get('server')) return;
+  try {
+    const res = await fetch('./config.json', { cache: 'no-store' });
+    if (!res.ok) return;
+    const cfg = (await res.json()) as { wsUrl?: string };
+    if (cfg.wsUrl && /^wss?:\/\//.test(cfg.wsUrl)) CLIENT.wsUrl = cfg.wsUrl;
+  } catch { /* no runtime config — keep defaults */ }
+}
+
 export const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;

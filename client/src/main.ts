@@ -3,7 +3,7 @@ import { formatMoney } from '../../shared/game/economy';
 import { C2S, ERR, S2C, type DevCmd, type ErrCode } from '../../shared/protocol/messages';
 import type { GameMode, RoomSnapshot } from '../../shared/types/state';
 import { AudioManager } from './audio/AudioManager';
-import { CLIENT, isTouch } from './config/client';
+import { CLIENT, isTouch, loadRuntimeConfig } from './config/client';
 import { qualitySetting, resolveQuality, type QualityName } from './config/quality';
 import { Game } from './game/Game';
 import { Net, type NetStatus } from './multiplayer/Net';
@@ -81,6 +81,8 @@ class App {
     const name = CLIENT.presetName ?? LocalStore.get().name ?? this.platform.playerName() ?? '';
     ($('name-input') as HTMLInputElement).value = name;
     $('loading-text').textContent = 'Подключаемся к серверу…';
+    await loadRuntimeConfig();
+    this.net.url = CLIENT.wsUrl;
     this.net.connect();
     document.addEventListener('visibilitychange', () => this.audio.suspend('hidden', document.hidden));
     window.addEventListener('blur', () => this.audio.suspend('blur', true));

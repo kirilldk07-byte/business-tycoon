@@ -34,7 +34,7 @@ export class Net {
   playerId: string | null = null;
   welcomed = false;
 
-  constructor(private url = CLIENT.wsUrl, private nameProvider: () => string) {
+  constructor(public url = CLIENT.wsUrl, private nameProvider: () => string) {
     const s = LocalStore.get().session;
     // Recent session (page reload / app re-open within the grace window) → resume.
     if (s && Date.now() - s.at < 60_000) this.sessionToken = s.token;
