@@ -149,6 +149,14 @@ VITE_WS_URL=wss://tycoon.example.com/ws npm run build
 См. `.env.example`. Главное: `PORT`, `DEV_TOOLS=0` в проде, `DATA_DIR`, `ALLOWED_ORIGINS`, и на этапе
 сборки клиента — `VITE_WS_URL`. Также URL сервера можно переопределить в рантайме: `?server=wss://…/ws`.
 
+## GitHub Pages (клиент) + туннель (сервер)
+Клиент опубликован на **https://kirilldk07-byte.github.io/business-tycoon/** (ветка `gh-pages`).
+GitHub Pages — только статика, поэтому игровой сервер работает отдельно, а страница по HTTPS может ходить только на `wss://`.
+- Адрес сервера клиент читает в рантайме из `config.json` рядом с `index.html` (приоритет: `?server=` → `config.json` → `VITE_WS_URL` → тот же хост).
+- `bash scripts/deploy-pages.sh` с `WS_URL=wss://.../ws` — собрать и опубликовать клиент.
+- `bash scripts/start-tunnel.sh` — поднять Cloudflare quick tunnel к локальному серверу (`PORT`, по умолчанию 3040) и сразу перепубликовать `config.json` с новым адресом.
+- Quick tunnel меняет адрес при каждом перезапуске и не переживает перезагрузку машины. Для постоянного адреса: named Cloudflare tunnel на своём домене или nginx + TLS (ниже), затем `deploy-pages.sh` с постоянным `WS_URL`.
+
 ## Деплой backend
 1. Сервер с Node 20+, домен, например `tycoon.example.com` → A-запись на IP.
 2. ```bash
