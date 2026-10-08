@@ -81,11 +81,37 @@ Rate limit (token bucket) по категориям: движение, дейс�
 - `PlayerProfile` (сервер, `profiles.json`): wins, losses, coopWins, rating (Elo), coins, шляпы. Начисляет только сервер по результату.
 - `MatchState` (в комнате): деньги, здания, работники, апгрейды, таймер. Сбрасывается при каждом матче/реванше — перенос денег невозможен.
 
+## Игровой процесс (v2)
+- **Участок стартует пустым.** Первая зелёная площадка — COFFEE STAND ($50). Дальше флагман растёт по цепочке
+  🥤 Киоск → ☕ Кофейня → 🍔 Кафе → 🍽️ Ресторан → 🏪 Магазин → 🛒 Супермаркет → 🏬 ТЦ → 🏢 Бизнес-центр → 🌆 Небоскрёб → 👑 BUSINESS EMPIRE.
+- **Новые бизнесы** (data-driven, `VENUES` в `shared/constants/config.ts` + слот в `world.ts` + билдер в `BuildingFactory.ts`):
+  Burger Shop → Restaurant → Supermarket → Car Dealership → Hotel → Shopping Mall, у каждого 3 уровня.
+- **Tycoon-площадки** на участке: стоишь на светящемся круге → `E`/кнопка → клиент **только запрашивает** покупку, сервер проверяет и подтверждает, затем каждый клиент локально проигрывает стройку (фундамент → рост → частицы → BUILD COMPLETE!).
+- **Автоматизация:** касса и производство вручную → кассир/рабочий → менеджер → новые бизнесы работают сами.
+- **Работники** стоят в своих зонах и анимированы (касса, производство, офис, доставка на скутере, маркетолог с вывеской).
+- **NPC-клиенты** идут по тротуару к нужному бизнесу; маршрут общий для сервера и клиента, время прихода — серверное. Рендер — 7 InstancedMesh на всю толпу.
+- **События:** RUSH HOUR, CITY FESTIVAL, VIP CUSTOMER (одинаковая фиксированная награда обоим — честный comeback), BIG DELIVERY (ящики у каждого игрока свои), BUSINESS BOOST; GOLDEN CUSTOMER (x10) приходит ко всем одновременно. CO-OP: DELIVERY, POWER FAILURE (два генератора), RUSH, финальная цель MEGA MALL.
+- **Таймлайн VS** (проверен `npm run test:balance`): 0–1 мин киоск и первые покупки → ~2 мин второй бизнес → 4–6 мин Restaurant/Supermarket → 7–9 мин быстрый рост → финал ≈ $1–2M у сильного игрока.
+
 ## Режимы
-- **⚔️ VS** — 10 минут, у каждого свой участок; побеждает большая `BUSINESS VALUE = cash + здания + постройки + 0.8·апгрейды + 0.6·персонал` (веса в `VALUE_WEIGHTS`). События RUSH HOUR / GOLDEN CUSTOMER / BUSINESS BOOST одновременно и одинаково для обоих.
-- **🤝 CO-OP** — общий бизнес и касса, 15 минут, цель BUILD THE MEGA MALL ($1M + уровень 8 + PRICE/CUSTOMERS/CAPACITY ≥ 4). Совместные события: DELIVERY ARRIVED (разгрузить 6 ящиков), POWER FAILURE (два рубильника в разных концах карты почти одновременно), CUSTOMER RUSH.
-- **🎮 Соло** — то же, что CO-OP, для одного.
-- **⚡ Quick Match** — FIFO; через 30 с предлагает CONTINUE SEARCHING / PLAY SOLO / CREATE PRIVATE ROOM. Ботов нет.
+- **⚔️ VS** — 10 минут, свои участки, победа по `BUSINESS VALUE = cash + здания + бизнесы + постройки + 0.8·апгрейды + 0.6·персонал` (`VALUE_WEIGHTS`).
+- **🤝 CO-OP** — общий бизнес и касса, 18 минут, цель MEGA MALL: $5M + HQ 9 + PRICE/CUSTOMERS/CAPACITY ≥ 4.
+- **🎮 SOLO** — как CO-OP для одного; единственный режим, где rewarded-реклама даёт игровой бонус (x2 производство 60 с).
+- **⚡ QUICK MATCH** — FIFO; через 30 с: KEEP SEARCHING / PLAY SOLO / CREATE PRIVATE ROOM. Ботов нет.
+
+## Мета-прогресс (вне матча)
+Профиль на сервере: wins, losses, rating (Elo), матчи, монеты, косметика, достижения
+(FIRST BUSINESS, ENTREPRENEUR, MILLIONAIRE, WINNER, TEAMWORK, TYCOON). В матч ничего из этого не переносится — старт всегда равный.
+
+## Реклама и честность
+- Interstitial — только после выхода из матча в меню.
+- Rewarded: монеты на косметику (вне VS-матча, в т.ч. на экране результатов) и x2 производство в SOLO. Сервер **отклоняет** `AD_BOOST`/`AD_REWARD` внутри VS (`security-e2e`).
+- `game_api_pause/resume` (Yandex SDK) глушат звук и ввод; время матча идёт на сервере.
+
+## Производительность
+Город, здания и бизнесы запечены в несколько мешей с вершинными цветами (`client/src/world/geo.ts`), толпа — instancing, частицы — instancing, всплывающие тексты — пул DOM.
+Полностью застроенный участок + город + толпа ≈ 80 draw calls / 60K треугольников на кадр (с тенями).
+Пресеты AUTO/LOW/MEDIUM/HIGH (pixel ratio, тени, лимит NPC); AUTO сам понижает качество при FPS < 30.
 
 ## Запуск локально (разработка)
 ```bash
@@ -99,12 +125,16 @@ Dev-панель (`?dev=1` + сервер с `DEV_TOOLS=1`): +деньги, ст
 
 ## Тесты
 ```bash
-WS_URL=ws://<host>:3040/ws npm run test:e2e                 # 30 проверок: комнаты, ready, старт, анти-чит, движение, реконнект, результат, реванш, forfeit, quick match, rate limit
-WS_URL=ws://<host>:3040/ws LATENCY=200 npm run test:e2e     # то же с задержкой 200 мс в каждую сторону
-WS_URL=ws://<host>:3040/ws npx tsx scripts/coop-e2e.ts      # CO-OP: общий бизнес, ящики, рубильники, TOO_FAR, Mega Mall
-WS_URL=ws://<host>:3040/ws npx tsx scripts/grace-e2e.ts     # соперник не вернулся за 45 с → техническая победа
-npm run test:balance                                         # симуляция экономики жадным ботом
+WS_URL=ws://<host>:3041/ws bash scripts/test-all.sh          # всё: typecheck + e2e (0/150 мс) + coop + security + grace (45 с)
+WS_URL=ws://<host>:3041/ws bash scripts/test-all.sh --quick  # без 45-секундного grace-теста
+WS_URL=... LATENCY=200 npx tsx scripts/e2e.ts                # плохая сеть
+WS_URL=... PROD_WS_URL=ws://<host>:3040/ws npx tsx scripts/security-e2e.ts   # + проверка, что prod отклоняет dev-команды
+npm run test:balance                                          # таймлайн экономики
 ```
+- `e2e.ts` (32): комнаты, ready, общий старт, анти-чит покупок, порядок бизнесов, постройка видна сопернику, движение, телепорт, эмоции, reconnect, одинаковый результат, заморозка после конца, rematch, forfeit, quick match, rate limit.
+- `coop-e2e.ts` (10): общий бизнес, TOO_FAR, ящики вдвоём, два генератора, Mega Mall → победа обоих.
+- `security-e2e.ts` (17–18): повтор покупки, чужой бизнес/ящики, украденный токен, полная/идущая комната, мусорные поля и типы сообщений, честность VS-событий, реклама в VS, спам, restore после reconnect, заморозка после MATCH_END, prod без dev.
+- `grace-e2e.ts`: соперник не вернулся за 45 с → техническая победа.
 (e2e требуют `DEV_TOOLS=1` на тестовом сервере.)
 
 ## Production build
