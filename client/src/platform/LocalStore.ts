@@ -9,6 +9,8 @@ interface Saved {
   session?: { token: string; at: number };
   music?: boolean;
   sfx?: boolean;
+  quality?: string;
+  tutorialDone?: boolean;
 }
 
 let cache: Saved = {};

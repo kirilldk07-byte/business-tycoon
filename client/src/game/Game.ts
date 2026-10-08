@@ -9,6 +9,7 @@ import type { AudioManager } from '../audio/AudioManager';
 import { createConstructionSite, createCrate, createDeliveryTruck, createMegaMall, TIER_SIZE } from '../business/BuildingFactory';
 import { BusinessView } from '../business/BusinessView';
 import { CLIENT, isTouch } from '../config/client';
+import { resolveQuality, type Quality } from '../config/quality';
 import { Interpolator } from '../multiplayer/Interpolator';
 import type { Net } from '../multiplayer/Net';
 import { Character } from '../player/Character';
@@ -40,6 +41,7 @@ export class Game {
   readonly world: World;
   readonly effects: Effects;
   readonly input: Input;
+  quality: Quality;
 
   room: RoomSnapshot | null = null;
   myId: string | null = null;
@@ -81,16 +83,17 @@ export class Game {
     joyBase: HTMLElement,
     joyKnob: HTMLElement,
   ) {
-    const low = isTouch || (navigator.hardwareConcurrency ?? 4) <= 4;
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: !low, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, low ? 1.5 : 2));
-    this.renderer.shadowMap.enabled = !low;
+    this.quality = resolveQuality();
+    const q = this.quality;
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: q.antialias, powerPreference: 'high-performance' });
+    this.renderer.setPixelRatio(q.pixelRatio);
+    this.renderer.shadowMap.enabled = q.shadows;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.05;
-    this.camera = new THREE.PerspectiveCamera(55, 1, 0.5, 400);
-    this.world = new World(this.scene, low);
+    this.camera = new THREE.PerspectiveCamera(55, 1, 0.5, 700);
+    this.world = new World(this.scene, q);
     this.effects = new Effects(this.scene, this.camera, floatLayer);
     this.input = new Input(canvas, joyBase, joyKnob);
     this.input.onKey = (code) => {
@@ -446,7 +449,7 @@ export class Game {
     const dt = Math.min(0.05, this.timer.getDelta());
     this.elapsed += dt;
     const serverNow = this.net.serverNow();
-    this.world.update(dt, this.elapsed);
+    this.world.update(dt, this.elapsed, this.camera.position);
 
     if (this.inMatch && this.me && this.room) {
       this.updateLocal(dt);
@@ -460,10 +463,11 @@ export class Game {
     } else {
       // Menu: slow cinematic orbit over the city.
       const t = this.elapsed * 0.05;
-      this.camera.position.set(Math.cos(t) * 60, 34, Math.sin(t) * 60);
+      this.camera.position.set(Math.cos(t) * 70, 38, Math.sin(t) * 70);
       this.camera.lookAt(0, 2, 0);
     }
     this.effects.update(dt);
+    this.world.crowd.commit();
     this.renderer.render(this.scene, this.camera);
   }
 
