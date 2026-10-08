@@ -17,7 +17,7 @@
   --sr: env(safe-area-inset-right, 0px);
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-html, body { margin: 0; height: 100%; overflow: hidden; background: #0f172a; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: #0f172a; overscroll-behavior: none; -webkit-touch-callout: none; -webkit-text-size-adjust: 100%; }
 body {
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   color: var(--ink); user-select: none; -webkit-user-select: none; touch-action: none;

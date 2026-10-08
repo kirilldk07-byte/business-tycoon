@@ -88,6 +88,8 @@ class App {
     this.net.url = CLIENT.wsUrl;
     this.net.connect();
     document.addEventListener('visibilitychange', () => this.audio.suspend('hidden', document.hidden));
+    // Yandex 1.6.2.7 / 1.6.1.8: no context menu anywhere on the game field (inputs keep theirs).
+    document.addEventListener('contextmenu', (e) => { if ((e.target as HTMLElement)?.tagName !== 'INPUT') e.preventDefault(); });
     window.addEventListener('blur', () => this.audio.suspend('blur', true));
     window.addEventListener('focus', () => this.audio.suspend('blur', false));
     this.platform.loadingReady();

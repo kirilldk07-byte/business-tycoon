@@ -3,6 +3,7 @@
 #   VITE_WS_URL=wss://tycoon.example.com/ws bash scripts/pack-yandex.sh
 set -euo pipefail
 : "${VITE_WS_URL:?set VITE_WS_URL=wss://your-domain/ws}"
+case "$VITE_WS_URL" in wss://*) ;; *) echo "Yandex Games is served over HTTPS: VITE_WS_URL must start with wss://" >&2; exit 1;; esac
 npx vite build
 rm -f dist/yandex-game.zip
 if command -v zip >/dev/null; then (cd dist/client && zip -qr ../yandex-game.zip .); else (cd dist/client && python3 -m zipfile -c ../yandex-game.zip *); fi

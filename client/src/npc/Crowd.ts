@@ -30,6 +30,8 @@ export class Crowd {
   private s = new THREE.Vector3();
   private zero = new THREE.Matrix4().makeScale(0, 0, 0);
   private dirty = false;
+  /** Highest slot ever handed out: instances above it are never drawn (saves vertex work). */
+  private hi = -1;
   private tmpColor = new THREE.Color();
   readonly capacity: number;
   /** Per-person body variation (height, width, hairstyle, stride) — same draw calls, less "clone army". */
@@ -59,6 +61,7 @@ export class Crowd {
       im.castShadow = shadows && (p === 'torso' || p === 'head');
       im.frustumCulled = false;
       for (let i = 0; i < capacity; i++) { im.setMatrixAt(i, this.zero); im.setColorAt(i, this.tmpColor.setHex(0xffffff)); }
+      im.count = 0;
       scene.add(im);
       this.meshes[p] = im;
     }
@@ -69,8 +72,14 @@ export class Crowd {
   get available() { return this.free.length; }
 
   alloc(look: Look): number {
-    const i = this.free.pop();
-    if (i === undefined) return -1;
+    // Lowest free slot first keeps the drawn range [0..hi] compact.
+    if (!this.free.length) return -1;
+    let k = 0;
+    for (let j = 1; j < this.free.length; j++) if (this.free[j] < this.free[k]) k = j;
+    const i = this.free[k];
+    this.free[k] = this.free[this.free.length - 1];
+    this.free.pop();
+    if (i > this.hi) { this.hi = i; for (const p of PARTS) this.meshes[p].count = i + 1; }
     const set = (p: Part, c: number) => this.meshes[p].setColorAt(i, this.tmpColor.setHex(c));
     set('torso', look.shirt); set('armL', look.shirt); set('armR', look.shirt);
     set('legL', look.pants); set('legR', look.pants);

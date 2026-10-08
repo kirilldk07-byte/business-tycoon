@@ -3,7 +3,9 @@ import { EVENTS, PLAYER } from '../../../shared/constants/config';
 import { MEGA_MALL_PLOT, PLOT_LOCAL, PLOTS, POWER_SWITCHES, WORLD_BOUNDS, plotToWorld } from '../../../shared/constants/world';
 import { emptyBusiness, formatMoney } from '../../../shared/game/economy';
 import { walkMs } from '../../../shared/game/paths';
-import { STRUCTURE_IDS, VENUE_IDS } from '../../../shared/constants/config';
+import {
+  STRUCTURES, STRUCTURE_IDS, UPGRADES, VENUES, VENUE_IDS, WORKERS, type StructureId, type UpgradeId, type VenueId, type WorkerId,
+} from '../../../shared/constants/config';
 import { q2 } from '../../../shared/protocol/codec';
 import { C2S, EMOTES, EMOTE_COOLDOWN_MS, S2C, type InteractTarget, type MoveTuple } from '../../../shared/protocol/messages';
 import { ANIM, type ActiveEvent, type MatchResult, type BusinessState, type PlayerPublic, type RoomSnapshot } from '../../../shared/types/state';
@@ -319,7 +321,11 @@ export class Game {
         if (!mine && this.room?.mode === 'vs') this.hud.toast(cause === 'tier' ? `🏗️ Соперник: HQ уровень ${b.tier}` : `🏗️ Соперник открыл новый бизнес`, 'info');
       } else if (cause.startsWith('upgrade')) {
         this.effects.burst(center, 'sparkle', 24);
-        if (mine) this.audio.play('upgrade');
+        const id = cause.split(':')[1] as UpgradeId;
+        if (mine && UPGRADES[id]) {
+          this.audio.play('upgrade');
+          this.effects.floatText(v.toWorld(new THREE.Vector3(PLOT_LOCAL.counter.lx, 4, 0)), `⬆ ${UPGRADES[id].name} · ур. ${b.upgrades[id]}`, 'big');
+        }
       } else if (cause.startsWith('hire') || cause.startsWith('structure')) {
         if (mine) this.audio.play(cause.startsWith('structure') ? 'construction' : 'purchase');
       } else if (cause === 'megamall') {
@@ -327,7 +333,12 @@ export class Game {
       }
       if (by && by !== this.myId && mine && this.room?.mode !== 'vs') {
         const who = this.room?.players.find((p) => p.id === by)?.name ?? 'Напарник';
-        this.hud.toast(`🤝 ${who}: ${cause.split(':')[0]}`, 'info');
+        const [kind, id] = cause.split(':');
+        const what: Record<string, string> = {
+          upgrade: `улучшил ${UPGRADES[id as UpgradeId]?.name ?? ''}`, hire: `нанял ${WORKERS[id as WorkerId]?.name ?? ''}`, tier: `поднял HQ до ур. ${b.tier}`,
+          venue: `открыл ${VENUES[id as VenueId]?.name ?? 'бизнес'}`, structure: `построил ${STRUCTURES[id as StructureId]?.name ?? ''}`, delivery: 'разгрузил доставку',
+        };
+        if (what[kind]) this.hud.toast(`🤝 ${who} ${what[kind]}`, 'info');
       }
     }
   }

@@ -78,6 +78,11 @@ export class BusinessView {
   private specials: SpecialMarker[] = [];
   private payAgg = new Map<string, { pos: THREE.Vector3; amt: number; t: number }>();
   private lastSaleAt = 0;
+  /** Persistent visuals for upgrade levels (so every purchase is visible, not just a number). */
+  private upgradeProps: THREE.Object3D | null = null;
+  private upgradeKey = '';
+  private balloons: THREE.Object3D[] = [];
+  private smokeAcc = 0;
   private lastReaction = -99;
   private reactions: { at: THREE.Vector3; delay: number }[] = [];
   private time = 0;
@@ -176,6 +181,7 @@ export class BusinessView {
     }
     for (const id of s.structures) if (!this.structures.has(id)) this.addStructure(id, animate);
     for (const [id, obj] of this.structures) if (!s.structures.includes(id)) { this.root.remove(obj); this.structures.delete(id); }
+    this.syncUpgradeProps(s, animate && !!prev);
     this.syncStaff(s, animate && !!prev);
     this.updateTags();
     this.rebuildPads();
@@ -253,6 +259,53 @@ export class BusinessView {
     obj.scale.set(1, 0.001, 1);
     parent.add(obj);
     this.anims.push({ target: obj, extra: [scaffold, ring], t: 0, dur: 1.6, label, dust: 0, size });
+  }
+
+  // ------------------------------------------------------------- upgrade props
+
+  private syncUpgradeProps(s: BusinessState, animate: boolean) {
+    const u = s.upgrades;
+    const key = s.tier >= 1 ? `${u.capacity}|${u.customers}|${u.price}|${u.speed}|${u.production}` : '';
+    if (key === this.upgradeKey) return;
+    this.upgradeKey = key;
+    if (this.upgradeProps) this.root.remove(this.upgradeProps);
+    this.upgradeProps = null;
+    this.balloons = [];
+    if (!key) return;
+    const b = new GeoBuilder();
+    const cx = PLOT_LOCAL.counter.lx;
+    // CAPACITY: velvet-rope queue lane grows with the level.
+    const posts = 2 + u.capacity; // ends before x≈11 where customers join the lane
+    for (let i = 0; i < posts; i++) {
+      const x = cx + 2.4 + i * 1.6;
+      for (const z of [-0.95, 0.95]) {
+        b.cyl(0.06, 0.95, 0xd4af37, x, 0, z, 6);
+        b.blob(0.1, 0xd4af37, x, 0.98, z, 1);
+        if (i > 0) b.box(1.6, 0.06, 0.06, 0xb91c1c, x - 0.8, 0.82, z);
+      }
+    }
+    // PRICE: golden stars over the counter.
+    for (let i = 0; i < u.price; i++) b.add(new THREE.OctahedronGeometry(0.22, 0), 0xfacc15, 1, 1, 1, { x: cx, y: 3.3, z: (i - (u.price - 1) / 2) * 0.55 });
+    // SPEED: green neon bars on the counter front.
+    for (let i = 0; i < u.speed; i++) b.box(0.06, 0.12, 2.6, 0x4ade80, cx + 0.72, 0.25 + i * 0.16, 0);
+    // PRODUCTION: indicator lamps on the machine.
+    for (let i = 0; i < u.production; i++) b.blob(0.13, 0xf97316, PLOT_LOCAL.machine.lx + 1.2, 0.5 + i * 0.3, PLOT_LOCAL.machine.lz - 0.9, 1);
+    const g = b.build(false);
+    // CUSTOMERS: balloon bunches at the entrance arch (animated).
+    const colors = [0xef4444, 0x3b82f6, 0xfacc15, 0x22c55e, 0xec4899, 0xa855f7];
+    for (let i = 0; i < u.customers; i++) {
+      const bb = new GeoBuilder();
+      bb.cyl(0.015, 2.2, 0xe5e7eb, 0, -2.2, 0, 6);
+      bb.blob(0.42, colors[i % colors.length], 0, 0.2, 0, 1.25);
+      const m = bb.build(false);
+      m.position.set(PLOT_LOCAL.entrance.lx + 0.4, 4.4 + (i % 3) * 0.35, (i % 2 ? 1 : -1) * (3.6 + Math.floor(i / 2) * 0.55));
+      m.userData.y = m.position.y;
+      g.add(m);
+      this.balloons.push(m);
+    }
+    this.root.add(g);
+    this.upgradeProps = g;
+    if (animate && this.isMine) this.effects.burst(this.toWorld(new THREE.Vector3(cx, 2.5, 0)), 'sparkle', 16);
   }
 
   // ------------------------------------------------------------- staff
@@ -505,8 +558,19 @@ export class BusinessView {
       }
     }
     for (const sp of this.spinners) sp.rotation.y = time * 1.2;
+    const prod = this.state?.upgrades.production ?? 0;
     const gear = this.machine.getObjectByName('gear');
-    if (gear) gear.rotation.z = time * 3;
+    if (gear) gear.rotation.z = time * (3 + prod * 1.5);
+    for (let i = 0; i < this.balloons.length; i++) {
+      const bl = this.balloons[i];
+      bl.position.y = bl.userData.y + Math.sin(time * 1.6 + i * 1.3) * 0.18;
+      bl.rotation.z = Math.sin(time * 1.1 + i) * 0.08;
+    }
+    // Production smoke: denser with each PRODUCTION level (only when the camera is close).
+    if (nearCamera && this.tier >= 1 && prod > 0) {
+      this.smokeAcc += dt * (0.4 + prod * 0.35);
+      if (this.smokeAcc >= 1) { this.smokeAcc = 0; this.effects.burst(this.toWorld(new THREE.Vector3(PLOT_LOCAL.machine.lx, 3.2, PLOT_LOCAL.machine.lz)), 'smoke', 1); }
+    }
     for (const p of this.pads.values()) {
       const s = 1 + Math.sin(time * 4) * 0.08 + p.pending * 0.6;
       p.ring.scale.set(s, s, s);

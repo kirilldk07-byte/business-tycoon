@@ -269,12 +269,19 @@ export class Hud implements HudSink {
     if (!b) return;
     const tabs: [Tab, string][] = [['build', '🏢 Бизнесы'], ['upgrades', '⬆️ Улучшения'], ['staff', '👷 Персонал']];
     if (room.mode !== 'vs') tabs.push(['goal', '🎯 Mega Mall']);
-    const key = JSON.stringify([this.tab, b.cash, b.tier, b.upgrades, b.workers, b.venues, b.structures, room.status, room.mode]);
+    const r = computeRates(b);
+    const cashHtml = `💰 $${formatMoney(b.cash)} <span class="muted small">· 📈 $${formatMoney(this.ctx.ipm(b.id))}/мин · касса $${r.price}/клиент</span>`;
+    if ($('panel-cash').innerHTML !== cashHtml) $('panel-cash').innerHTML = cashHtml;
+    // Rebuild rows only when what is shown/affordable changes — NOT on every cash tick:
+    // replacing buttons under a finger makes taps get lost on phones.
+    const afford = [
+      checkTier(b).ok, ...VENUE_IDS.map((id) => checkVenue(b, id).ok), ...STRUCTURE_IDS.map((id) => checkStructure(b, id).ok),
+      ...UPGRADE_IDS.map((id) => checkUpgrade(b, id).ok), ...WORKER_IDS.map((id) => checkWorker(b, id).ok), megaMallMissing(b).length === 0,
+    ].map((x) => (x ? 1 : 0)).join('');
+    const key = JSON.stringify([this.tab, afford, b.tier, b.upgrades, b.workers, b.venues, b.structures, room.status, room.mode]);
     if (key === this.lastPanelKey) return;
     this.lastPanelKey = key;
     $('panel-tabs').innerHTML = tabs.map(([t, l]) => `<button data-tab="${t}" class="${t === this.tab ? 'on' : ''}">${l}</button>`).join('');
-    const r = computeRates(b);
-    $('panel-cash').innerHTML = `💰 $${formatMoney(b.cash)} <span class="muted small">· 📈 $${formatMoney(this.ctx.ipm(b.id))}/мин · касса $${r.price}/клиент</span>`;
     const rows: string[] = [];
     const btn = (ok: boolean, code: string, price: number, data: string) => {
       if (code === 'MAXED') return `<button class="btn ghost" disabled>MAX</button>`;

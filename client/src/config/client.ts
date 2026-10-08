@@ -3,10 +3,17 @@
 
 const params = new URLSearchParams(location.search);
 
+/** On an HTTPS page only wss:// is usable (mixed content is blocked by browsers). */
+export function safeWsUrl(u: string | null | undefined): string | null {
+  if (!u || !/^wss?:\/\//.test(u)) return null;
+  if (location.protocol === 'https:' && u.startsWith('ws://')) { console.warn('[config] ignoring insecure ws:// on https page:', u); return null; }
+  return u;
+}
+
 function resolveWsUrl(): string {
-  const override = params.get('server');
+  const override = safeWsUrl(params.get('server'));
   if (override) return override;
-  const env = import.meta.env.VITE_WS_URL as string | undefined;
+  const env = safeWsUrl(import.meta.env.VITE_WS_URL as string | undefined);
   if (env) return env;
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}/ws`;
@@ -29,12 +36,13 @@ export const CLIENT = {
  * Priority: ?server= param > config.json > VITE_WS_URL > same host.
  */
 export async function loadRuntimeConfig(): Promise<void> {
-  if (params.get('server')) return;
+  if (safeWsUrl(params.get('server'))) return;
   try {
     const res = await fetch('./config.json', { cache: 'no-store' });
     if (!res.ok) return;
     const cfg = (await res.json()) as { wsUrl?: string };
-    if (cfg.wsUrl && /^wss?:\/\//.test(cfg.wsUrl)) CLIENT.wsUrl = cfg.wsUrl;
+    const u = safeWsUrl(cfg.wsUrl);
+    if (u) CLIENT.wsUrl = u;
   } catch { /* no runtime config — keep defaults */ }
 }
 

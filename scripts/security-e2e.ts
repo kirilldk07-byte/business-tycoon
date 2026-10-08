@@ -109,6 +109,12 @@ async function main() {
   A.raw({ t: 'GIVE_MONEY', amount: 1e9 });
   await A.wait(S2C.ERROR, (m) => m.code === 'BAD_MESSAGE');
   ok(true, 'unknown message type rejected');
+  // Fake match end / fake result: server-only messages sent by a client must change nothing.
+  A.raw({ t: S2C.MATCH_END, result: { winnerIds: [A.id], reason: 'time' } });
+  A.raw({ t: 'END_MATCH' });
+  A.raw({ t: 'MATCH_RESULT', winnerIds: [A.id] });
+  await sleep(800);
+  ok(!A.msgs.some((m) => m.t === S2C.MATCH_END) && !B.msgs.some((m) => m.t === S2C.MATCH_END), 'fake MATCH_END / result from a client ignored — match keeps running');
 
   // Opponent's business
   const oppCounter = plotToWorld(bizB.plot, PLOT_LOCAL.counter.lx, PLOT_LOCAL.counter.lz);
