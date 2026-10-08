@@ -1,0 +1,31 @@
+{
+  "name": "business-tycoon",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "BUSINESS TYCOON: бизнес на двоих — real-time multiplayer 3D tycoon for Yandex Games",
+  "scripts": {
+    "dev:server": "DEV_TOOLS=1 tsx watch server/index.ts",
+    "dev:client": "vite",
+    "build:client": "vite build",
+    "build:server": "esbuild server/index.ts --bundle --platform=node --format=esm --target=node20 --packages=external --outfile=dist/server/index.js",
+    "build": "npm run build:client && npm run build:server",
+    "start": "node dist/server/index.js",
+    "typecheck": "tsc --noEmit -p .",
+    "test:e2e": "tsx scripts/e2e.ts",
+    "test:balance": "tsx scripts/balance.ts"
+  },
+  "dependencies": {
+    "three": "^0.186.1",
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "@types/three": "^0.186.0",
+    "@types/ws": "^8.18.2",
+    "esbuild": "^0.28.2",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4"
+  }
+}

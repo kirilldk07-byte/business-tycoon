@@ -1,0 +1,19 @@
+# /etc/systemd/system/business-tycoon.service
+[Unit]
+Description=Business Tycoon multiplayer game server
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/business-tycoon
+EnvironmentFile=/opt/business-tycoon/.env
+ExecStart=/usr/bin/node dist/server/index.js
+Restart=always
+RestartSec=2
+# SIGTERM → server snapshots live rooms to DATA_DIR before exit
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target
