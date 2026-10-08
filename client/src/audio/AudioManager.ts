@@ -3,7 +3,7 @@ import { LocalStore } from '../platform/LocalStore';
 // All sounds are synthesized with WebAudio: zero asset downloads, tiny build.
 export type Sfx =
   | 'money' | 'purchase' | 'construction' | 'upgrade' | 'customer' | 'countdown' | 'go'
-  | 'victory' | 'defeat' | 'ui' | 'notify' | 'error' | 'emote' | 'jump' | 'produce';
+  | 'victory' | 'defeat' | 'ui' | 'notify' | 'error' | 'emote' | 'jump' | 'produce' | 'event' | 'joined' | 'reconnect';
 
 export class AudioManager {
   private ctx: AudioContext | null = null;
@@ -34,6 +34,7 @@ export class AudioManager {
       this.musicGain.gain.value = this.musicOn ? 0.22 : 0;
       this.musicGain.connect(this.master);
       this.startMusic();
+      this.startAmbience();
     }
     if (this.ctx.state === 'suspended' && this.suspendedBy.size === 0) void this.ctx.resume();
   }
@@ -121,6 +122,9 @@ export class AudioManager {
       case 'error': this.tone(220, t, 0.15, 'sawtooth', 0.12); break;
       case 'emote': this.tone(700, t, 0.1, 'sine', 0.15, 1100); break;
       case 'jump': this.tone(300, t, 0.15, 'sine', 0.12, 600); break;
+      case 'event': [659, 880, 659, 988].forEach((f, i) => this.tone(f, t + i * 0.09, 0.14, 'square', 0.12)); break;
+      case 'joined': this.tone(523, t, 0.12, 'triangle', 0.22); this.tone(784, t + 0.12, 0.22, 'triangle', 0.22); break;
+      case 'reconnect': [392, 523, 659].forEach((f, i) => this.tone(f, t + i * 0.08, 0.16, 'sine', 0.2)); break;
     }
   }
 
@@ -164,5 +168,36 @@ export class AudioManager {
     if (s % 2 === 0 && (step >> 4) % 2 === 1) n(chords[bar][melody[(s / 2) % 8]] * 4, 0.12, 'sine', 0.08);
   }
 
-  dispose() { clearInterval(this.musicTimer); void this.ctx?.close(); }
+  // ---- city ambience: low traffic hum + occasional horns / birds ----
+  private ambienceTimer = 0;
+  private startAmbience() {
+    const ctx = this.ctx!;
+    const len = ctx.sampleRate * 4;
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    let last = 0;
+    for (let i = 0; i < len; i++) { last = (last + 0.02 * (Math.random() * 2 - 1)) / 1.02; d[i] = last * 3.5; } // brown noise
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.loop = true;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 420;
+    const g = ctx.createGain();
+    g.gain.value = 0.18;
+    src.connect(lp).connect(g).connect(this.sfxGain);
+    src.start();
+    const sprinkle = () => {
+      if (this.ctx && this.sfxOn && this.ctx.state === 'running') {
+        const t = this.ctx.currentTime;
+        if (Math.random() < 0.4) { this.tone(392, t, 0.25, 'sawtooth', 0.025); this.tone(330, t + 0.28, 0.35, 'sawtooth', 0.025); }
+        else for (let i = 0; i < 3; i++) this.tone(2600 + Math.random() * 800, t + i * 0.12, 0.06, 'sine', 0.02, 3400);
+      }
+      this.ambienceTimer = window.setTimeout(sprinkle, 6000 + Math.random() * 9000);
+    };
+    sprinkle();
+  }
+
+  dispose() {
+    clearTimeout(this.ambienceTimer); clearInterval(this.musicTimer); void this.ctx?.close(); }
 }

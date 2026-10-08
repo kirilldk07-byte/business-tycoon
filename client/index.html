@@ -22,20 +22,18 @@
   <div id="menu" class="screen">
     <div class="topline">
       <div class="chip" id="menu-coins">🪙 0</div>
-      <div class="chip" id="conn-chip">⚪ …</div>
-      <button class="icon-btn" id="btn-music" title="Музыка">🎵</button>
-      <button class="icon-btn" id="btn-sfx" title="Звуки">🔊</button>
+      <div class="conn" id="conn-chip"><i></i><span>Connecting…</span></div>
     </div>
     <div class="logo big"><span>BUSINESS</span><b>TYCOON</b><i>бизнес на двоих</i></div>
-    <label class="name-field">Твоё имя <input id="name-input" maxlength="16" autocomplete="off" /></label>
     <div class="menu-buttons">
-      <button class="btn green" data-act="solo">🎮 ИГРАТЬ ОДНОМУ</button>
-      <button class="btn blue" data-act="friend">👥 ИГРАТЬ С ДРУГОМ</button>
-      <button class="btn orange" data-act="quick">⚡ БЫСТРАЯ ИГРА</button>
+      <button class="btn green" data-act="solo">🎮 SOLO</button>
+      <button class="btn blue" data-act="friend">👥 PLAY WITH FRIEND</button>
+      <button class="btn orange" data-act="quick">⚡ QUICK MATCH</button>
       <div class="row">
-        <button class="btn purple" data-act="shop">🛒 МАГАЗИН</button>
-        <button class="btn yellow" data-act="leaderboard">🏆 РЕЙТИНГ</button>
+        <button class="btn yellow" data-act="leaderboard">🏆 LEADERBOARD</button>
+        <button class="btn purple" data-act="shop">🛒 SHOP</button>
       </div>
+      <button class="btn ghost" data-act="settings">⚙ SETTINGS</button>
     </div>
     <div class="profile-line" id="profile-line"></div>
   </div>
@@ -43,14 +41,10 @@
   <!-- FRIEND -->
   <div id="friend" class="screen">
     <div class="card">
-      <h2>👥 Играть с другом</h2>
-      <p class="muted">Друг может быть на другом устройстве — телефоне или компьютере.</p>
-      <div class="seg" id="create-mode">
-        <button data-mode="vs" class="on">⚔️ VS</button>
-        <button data-mode="coop">🤝 CO-OP</button>
-      </div>
-      <button class="btn green" data-act="create">СОЗДАТЬ КОМНАТУ</button>
-      <button class="btn blue" data-act="join">ВОЙТИ ПО КОДУ</button>
+      <h2>👥 PLAY WITH FRIEND</h2>
+      <p class="muted">Друг может играть с другого устройства — телефона или компьютера.</p>
+      <button class="btn green" data-act="create">CREATE ROOM</button>
+      <button class="btn blue" data-act="join">JOIN ROOM</button>
       <button class="btn ghost" data-act="back">← Назад</button>
     </div>
   </div>
@@ -58,10 +52,14 @@
   <!-- JOIN -->
   <div id="join" class="screen">
     <div class="card">
-      <h2>Вход по коду</h2>
+      <h2>JOIN ROOM</h2>
       <p class="muted">Введи 6 цифр, которые прислал друг</p>
-      <input id="code-input" class="code-input" inputmode="numeric" maxlength="6" placeholder="••••••" autocomplete="off" />
-      <button class="btn green" data-act="connect">ПОДКЛЮЧИТЬСЯ</button>
+      <div class="code-row">
+        <input id="code-input" class="code-input" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" maxlength="6" placeholder="••••••" aria-label="Код комнаты" />
+        <button class="icon-btn paste" data-act="paste" title="Вставить">📋</button>
+      </div>
+      <p class="form-error" id="join-error"></p>
+      <button class="btn green" id="btn-connect" data-act="connect">CONNECT</button>
       <button class="btn ghost" data-act="back-friend">← Назад</button>
     </div>
   </div>
@@ -71,18 +69,19 @@
     <div class="card wide">
       <div class="lobby-head">
         <div>
-          <div class="muted small" id="lobby-hint">Отправь код другу</div>
+          <div class="muted small" id="lobby-hint">ROOM CODE</div>
           <div class="room-code" id="room-code">——————</div>
         </div>
         <div class="code-actions">
-          <button class="btn small" data-act="copy">📋 КОПИРОВАТЬ</button>
-          <button class="btn small" data-act="share" id="btn-share">📤 ПОДЕЛИТЬСЯ</button>
+          <button class="btn small" data-act="copy">📋 COPY CODE</button>
+          <button class="btn small" data-act="share" id="btn-share">📤 SHARE</button>
           <button class="btn small ghost" data-act="copy-link">🔗 Ссылка</button>
         </div>
       </div>
+      <div class="waiting" id="lobby-waiting"><span class="dots"></span> WAITING FOR PLAYER…</div>
       <div class="players" id="lobby-players"></div>
       <div class="mode-row">
-        <span class="muted">Режим:</span>
+        <span class="muted">MODE:</span>
         <div class="seg" id="lobby-mode">
           <button data-mode="vs">⚔️ VS</button>
           <button data-mode="coop">🤝 CO-OP</button>
@@ -100,12 +99,12 @@
   <!-- QUICK MATCH -->
   <div id="search" class="screen">
     <div class="card">
-      <h2 id="search-title">SEARCHING FOR PLAYER…</h2>
+      <h2 id="search-title">SEARCHING…</h2>
       <div class="search-timer" id="search-timer">00:00</div>
       <div class="spinner"></div>
       <div id="search-alt" class="hidden">
         <p class="muted">Пока никого нет. Что делаем?</p>
-        <button class="btn orange" data-act="continue-search">CONTINUE SEARCHING</button>
+        <button class="btn orange" data-act="continue-search">KEEP SEARCHING</button>
         <button class="btn green" data-act="solo">PLAY SOLO</button>
         <button class="btn blue" data-act="create-private">CREATE PRIVATE ROOM</button>
       </div>
@@ -116,7 +115,7 @@
   <!-- SHOP -->
   <div id="shop" class="screen">
     <div class="card wide">
-      <h2>🛒 Магазин</h2>
+      <h2>🛒 SHOP</h2>
       <p class="muted small">Только косметика — никаких преимуществ в матче.</p>
       <div class="chip big" id="shop-coins">🪙 0</div>
       <div class="shop-grid" id="shop-grid"></div>
@@ -128,9 +127,30 @@
   <!-- LEADERBOARD -->
   <div id="leaderboard" class="screen">
     <div class="card">
-      <h2>🏆 Рейтинг</h2>
+      <h2>🏆 LEADERBOARD</h2>
       <div class="lb-tabs muted small" id="lb-source"></div>
       <ol class="lb" id="lb-list"></ol>
+      <button class="btn ghost" data-act="back">← Назад</button>
+    </div>
+  </div>
+
+  <!-- SETTINGS -->
+  <div id="settings" class="screen">
+    <div class="card wide">
+      <h2>⚙ SETTINGS</h2>
+      <label class="field">Имя игрока <input id="name-input" maxlength="16" autocomplete="off" /></label>
+      <div class="field">Графика
+        <div class="seg" id="quality-seg">
+          <button data-q="auto">AUTO</button><button data-q="low">LOW</button><button data-q="medium">MEDIUM</button><button data-q="high">HIGH</button>
+        </div>
+      </div>
+      <p class="muted small" id="quality-note"></p>
+      <div class="row">
+        <button class="btn ghost toggle" id="set-music">🎵 Музыка</button>
+        <button class="btn ghost toggle" id="set-sfx">🔊 Звуки</button>
+      </div>
+      <h3 class="sub">🏅 Достижения</h3>
+      <div class="ach-grid" id="ach-grid"></div>
       <button class="btn ghost" data-act="back">← Назад</button>
     </div>
   </div>
@@ -140,30 +160,41 @@
     <div class="hud-top">
       <div class="hud-left">
         <div class="stat money" id="hud-money">💰 $0</div>
-        <div class="stat" id="hud-value">🏢 $0</div>
+        <div class="stat small" id="hud-ipm">📈 $0/мин</div>
       </div>
-      <div class="hud-center">
-        <div class="timer" id="hud-timer">10:00</div>
-        <div class="vs" id="hud-vs"></div>
+      <div class="hud-center" id="hud-center">
+        <div class="vs-card" id="vs-card">
+          <div class="side you"><small>YOU</small><b id="vs-you">$0</b></div>
+          <div class="mid"><div class="timer" id="hud-timer">10:00</div></div>
+          <div class="side opp"><small id="vs-opp-name">OPPONENT</small><b id="vs-opp">$0</b></div>
+        </div>
+        <div class="tug" id="tug"><div class="tug-you" id="tug-you"></div></div>
+        <div class="goal-card hidden" id="goal-card"><div class="timer" id="hud-timer2">18:00</div><div class="goal-line" id="goal-line">🎯 TEAM GOAL</div><div class="goal-bar"><div id="goal-fill"></div></div></div>
       </div>
       <div class="hud-right">
-        <div class="stat" id="hud-opp"></div>
-        <div class="ping" id="hud-ping">🟢 — ms</div>
+        <div class="conn small" id="hud-conn"><i></i><span>—</span></div>
+        <button class="icon-btn" id="btn-pause" title="Menu (Esc)">☰</button>
       </div>
     </div>
+    <div id="lead-banner" class="hidden"></div>
     <div id="event-banner" class="hidden"></div>
+    <div id="tutorial" class="hidden"></div>
     <div id="opp-wait" class="hidden"></div>
     <div id="prompt" class="hidden"></div>
     <div id="toasts"></div>
 
     <div class="hud-bottom">
-      <div class="emotes" id="emotes"></div>
-      <button class="btn biz-btn" id="btn-biz">🏢 БИЗНЕС <small>[B]</small></button>
+      <div class="emote-wrap">
+        <button class="icon-btn emote-toggle" id="emote-toggle">😀</button>
+        <div class="emotes" id="emotes"></div>
+      </div>
+      <button class="btn biz-btn" id="btn-biz">🏢 <span>БИЗНЕС</span> <small>[B]</small></button>
     </div>
 
+    <div id="joy-zone"></div>
     <div id="joy-base"><div id="joy-knob"></div></div>
     <div id="touch-buttons">
-      <button class="round-btn" id="btn-interact">E</button>
+      <button class="round-btn interact" id="btn-interact">E</button>
       <button class="round-btn jump" id="btn-jump">⤒</button>
     </div>
 
@@ -175,8 +206,6 @@
       <div class="panel-cash" id="panel-cash"></div>
       <div class="panel-body" id="panel-body"></div>
     </div>
-
-    <button class="icon-btn menu-btn" id="btn-pause">⏸</button>
   </div>
 
   <div id="countdown" class="hidden"></div>
@@ -184,27 +213,33 @@
   <div id="reconnect" class="hidden">
     <div class="card">
       <div class="spinner"></div>
-      <h2>Переподключение…</h2>
-      <p class="muted">Связь потеряна. Матч продолжается — возвращаем тебя в игру.</p>
+      <h2>CONNECTION LOST</h2>
+      <p class="big-muted">RECONNECTING…</p>
+      <p class="muted small" id="reconnect-attempt">Attempt 1</p>
+      <p class="muted small">Матч продолжается — тебя ждут до 45 секунд.</p>
     </div>
   </div>
 
   <div id="pause" class="screen">
     <div class="card">
-      <h2>Пауза</h2>
+      <h2>MENU</h2>
       <p class="muted small">Матч не останавливается — это мультиплеер!</p>
-      <button class="btn green" data-act="resume">Продолжить</button>
-      <button class="btn ghost" data-act="toggle-music">🎵 Музыка</button>
-      <button class="btn ghost" data-act="toggle-sfx">🔊 Звуки</button>
+      <button class="btn green" data-act="resume">▶ Продолжить</button>
+      <div class="row">
+        <button class="btn ghost toggle" data-act="toggle-music" id="pause-music">🎵 Музыка</button>
+        <button class="btn ghost toggle" data-act="toggle-sfx" id="pause-sfx">🔊 Звуки</button>
+      </div>
       <button class="btn red" data-act="leave-match">Покинуть матч</button>
       <p class="muted small" id="leave-warn"></p>
     </div>
   </div>
 
   <div id="results" class="screen">
-    <div class="card wide">
+    <div class="card wide results-card">
+      <div class="res-badge" id="res-badge">🏆</div>
       <h1 id="res-title"></h1>
       <p class="muted" id="res-reason"></p>
+      <div class="res-score" id="res-score"></div>
       <table class="res-table" id="res-table"></table>
       <div class="rewards" id="res-rewards"></div>
       <div class="row">
@@ -227,6 +262,7 @@
     <button data-devc="offline">Offline 10s</button>
     <button data-devc="client2">2nd client</button>
     <label>Lag <select id="dev-lag"><option>0</option><option>50</option><option>100</option><option>200</option></select></label>
+    <span id="dev-info"></span>
   </div>
 
   <script type="module" src="./src/main.ts"></script>

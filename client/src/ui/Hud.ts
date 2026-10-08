@@ -1,11 +1,13 @@
 import {
-  COOP_GOAL, ECONOMY, STRUCTURES, STRUCTURE_IDS, TIERS, UPGRADES, UPGRADE_IDS, VENUES, VENUE_IDS, WORKERS, WORKER_IDS,
+  ACHIEVEMENTS, COOP_GOAL, ECONOMY, STRUCTURES, STRUCTURE_IDS, TIERS, UPGRADES, UPGRADE_IDS, VENUES, VENUE_IDS, WORKERS, WORKER_IDS,
+  type AchievementId,
 } from '../../../shared/constants/config';
 import { EVENT_INFO } from '../../../shared/events';
 import {
-  checkStructure, checkTier, checkUpgrade, checkVenue, checkWorker, computeRates, formatMoney, megaMallMissing, upgradeCost, venueCost, venueUnlocked, workerCost,
+  checkStructure, checkTier, checkUpgrade, checkVenue, checkWorker, computeRates, formatMoney, megaMallMissing, upgradeCost,
+  venueCost, venueUnlocked, workerCost,
 } from '../../../shared/game/economy';
-import { C2S, EMOTES } from '../../../shared/protocol/messages';
+import { C2S, EMOTES, EMOTE_COOLDOWN_MS } from '../../../shared/protocol/messages';
 import type { ActiveEvent, BusinessState, RoomSnapshot } from '../../../shared/types/state';
 import type { AudioManager } from '../audio/AudioManager';
 import type { HudSink } from '../game/Game';
@@ -14,27 +16,46 @@ import type { Net } from '../multiplayer/Net';
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 type Tab = 'build' | 'upgrades' | 'staff' | 'goal';
 
+export interface HudCtx {
+  room: () => RoomSnapshot | null;
+  myId: () => string | null;
+  ipm: (bizId: number) => number;
+  emote: (i: number) => boolean;
+  interact: () => void;
+  jump: () => void;
+  pause: () => void;
+}
+
+/** In-match UI: compact VS card, team goal, prompts, events, toasts, emotes, business panel. */
 export class Hud implements HudSink {
   private root = $('hud');
   private panelOpen = false;
   private tab: Tab = 'build';
   private lastPanelKey = '';
-  private lastPing = 0;
   private lastCountdown = '';
   private eventKey = '';
+  private leader: 'you' | 'opp' | null = null;
+  private lastLeadBanner = 0;
+  private emoteCdUntil = 0;
 
-  constructor(private net: Net, private audio: AudioManager, private ctx: { room: () => RoomSnapshot | null; myId: () => string | null; emote: (i: number) => void; interact: () => void; jump: () => void; pause: () => void }) {
+  constructor(private net: Net, private audio: AudioManager, private ctx: HudCtx) {
     $('btn-biz').onclick = () => this.togglePanel();
     $('panel-close').onclick = () => this.togglePanel(false);
-    $('btn-interact').addEventListener('touchstart', (e) => { e.preventDefault(); ctx.interact(); });
-    $('btn-jump').addEventListener('touchstart', (e) => { e.preventDefault(); ctx.jump(); });
+    const tap = (id: string, fn: () => void) => {
+      const el = $(id);
+      el.addEventListener('touchstart', (e) => { e.preventDefault(); fn(); }, { passive: false });
+      el.addEventListener('click', fn);
+    };
+    tap('btn-interact', () => ctx.interact());
+    tap('btn-jump', () => ctx.jump());
     $('btn-pause').onclick = () => ctx.pause();
+    $('emote-toggle').onclick = () => $('emotes').classList.toggle('open');
     const em = $('emotes');
     EMOTES.forEach((e, i) => {
       const b = document.createElement('button');
       b.textContent = e;
       b.title = `${i + 1}`;
-      b.onclick = () => ctx.emote(i);
+      b.onclick = () => this.tryEmote(i);
       em.appendChild(b);
     });
     window.addEventListener('keydown', (e) => {
@@ -49,9 +70,20 @@ export class Hud implements HudSink {
     });
   }
 
+  /** Emote with visible cooldown (server rate-limits as well). */
+  tryEmote(i: number) {
+    if (performance.now() < this.emoteCdUntil) return;
+    if (!this.ctx.emote(i)) return;
+    this.emoteCdUntil = performance.now() + EMOTE_COOLDOWN_MS;
+    const em = $('emotes');
+    em.classList.add('cooldown');
+    em.classList.remove('open');
+    setTimeout(() => em.classList.remove('cooldown'), EMOTE_COOLDOWN_MS);
+  }
+
   show(on: boolean) {
     this.root.classList.toggle('hidden', !on);
-    if (!on) { this.togglePanel(false); $('countdown').classList.add('hidden'); }
+    if (!on) { this.togglePanel(false); $('countdown').classList.add('hidden'); this.leader = null; }
   }
 
   openTab(tab: Tab) {
@@ -66,22 +98,29 @@ export class Hud implements HudSink {
     if (open) { this.audio.play('ui'); this.lastPanelKey = ''; this.renderPanel(); }
   }
 
-  prompt(text: string | null) {
+  prompt(text: string | null, locked = false) {
     const p = $('prompt');
     if (!text) { p.classList.add('hidden'); $('btn-interact').classList.remove('ready'); return; }
     p.textContent = text;
+    p.classList.toggle('locked', locked);
     p.classList.remove('hidden');
-    $('btn-interact').classList.add('ready');
+    $('btn-interact').classList.toggle('ready', !locked);
   }
 
-  toast(text: string, kind: 'info' | 'good' | 'bad' = 'info') {
+  toast(text: string, kind: 'info' | 'good' | 'bad' | 'ach' = 'info') {
     const box = $('toasts');
     const el = document.createElement('div');
     el.className = `toast ${kind}`;
     el.textContent = text;
     box.prepend(el);
     while (box.children.length > 4) box.lastChild?.remove();
-    setTimeout(() => el.remove(), 2600);
+    setTimeout(() => el.remove(), kind === 'ach' ? 4000 : 2600);
+  }
+
+  achievement(id: AchievementId) {
+    const a = ACHIEVEMENTS[id];
+    this.toast(`🏅 ${a.icon} ${a.name} — ${a.desc}`, 'ach');
+    this.audio.play('upgrade');
   }
 
   flashMoney() {
@@ -89,6 +128,20 @@ export class Hud implements HudSink {
     m.classList.remove('flash');
     void m.offsetWidth;
     m.classList.add('flash');
+  }
+
+  setTutorial(text: string | null, sub?: string) {
+    const el = $('tutorial');
+    if (!text) { el.classList.add('hidden'); return; }
+    const html = `${text}${sub ? `<small>${sub}</small>` : ''}`;
+    if (el.innerHTML !== html) { el.innerHTML = html; el.classList.remove('hidden'); this.audio.play('notify'); }
+  }
+
+  /** Connection indicator; detailed only in dev mode. */
+  setConnection(state: 'ok' | 'warn' | 'bad', text: string) {
+    const c = $('hud-conn');
+    c.className = `conn small ${state}`;
+    c.querySelector('span')!.textContent = text;
   }
 
   private myBiz(room: RoomSnapshot): BusinessState | undefined {
@@ -101,8 +154,7 @@ export class Hud implements HudSink {
     const room = this.ctx.room();
     const cd = $('countdown');
     if (!room || room.status === 'lobby') { cd.classList.add('hidden'); return; }
-    const now = this.net.serverNow();
-    const left = room.startTime - now;
+    const left = room.startTime - this.net.serverNow();
     let text = '';
     if (room.status === 'countdown' || (left > -900 && left < 3500)) {
       if (left > 0) text = String(Math.ceil(left / 1000));
@@ -122,74 +174,89 @@ export class Hud implements HudSink {
   /** ~5 Hz HUD refresh. */
   update() {
     const room = this.ctx.room();
-    if (!room) return;
+    if (!room || room.status === 'lobby') return;
     const biz = this.myBiz(room);
     const now = this.net.serverNow();
     if (biz) {
       $('hud-money').textContent = `💰 $${formatMoney(biz.cash)}`;
-      $('hud-value').textContent = `🏢 $${formatMoney(biz.value)}`;
+      $('hud-ipm').textContent = `📈 $${formatMoney(this.ctx.ipm(biz.id))}/мин`;
     }
     const remain = room.status === 'playing' ? Math.max(0, room.endTime - now) : room.status === 'countdown' ? room.endTime - room.startTime : 0;
-    const mm = Math.floor(remain / 60000), ss = Math.floor((remain % 60000) / 1000);
-    const timer = $('hud-timer');
-    timer.textContent = `⏱ ${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
-    timer.classList.toggle('low', room.status === 'playing' && remain < 30_000);
+    const t = `${String(Math.floor(remain / 60000)).padStart(2, '0')}:${String(Math.floor((remain % 60000) / 1000)).padStart(2, '0')}`;
+    const low = room.status === 'playing' && remain < 30_000;
+    const vs = room.mode === 'vs';
+    $('vs-card').classList.toggle('hidden', !vs);
+    $('tug').classList.toggle('hidden', !vs);
+    $('goal-card').classList.toggle('hidden', vs);
+    for (const id of ['hud-timer', 'hud-timer2']) { $(id).textContent = `⏱ ${t}`; $(id).classList.toggle('low', low); }
 
-    const opp = $('hud-opp');
-    const vs = $('hud-vs');
-    if (room.mode === 'vs') {
-      const me = room.players.find((p) => p.id === this.ctx.myId());
+    if (vs) {
       const other = room.players.find((p) => p.id !== this.ctx.myId());
       const ob = other ? room.businesses.find((b) => b.ownerIds.includes(other.id)) : undefined;
-      opp.className = 'stat opp';
-      opp.textContent = `⚔️ ${other?.name ?? '—'} $${formatMoney(ob?.value ?? 0)}`;
-      vs.innerHTML = `<span class="side">YOU $${formatMoney(biz?.value ?? 0)}</span><span class="vsx">VS</span><span class="side">${esc(other?.name ?? 'P2')} $${formatMoney(ob?.value ?? 0)}</span>`;
-      void me;
+      const you = biz?.value ?? 0, opp = ob?.value ?? 0;
+      $('vs-you').textContent = `$${formatMoney(you)}`;
+      $('vs-opp').textContent = `$${formatMoney(opp)}`;
+      $('vs-opp-name').textContent = (other?.name ?? 'OPPONENT').toUpperCase();
+      const share = you + opp > 0 ? you / (you + opp) : 0.5;
+      $('tug-you').style.width = `${Math.round(Math.min(0.97, Math.max(0.03, share)) * 100)}%`;
+      // Lead change with hysteresis: needs a 4 % margin and 8 s between banners.
+      let lead = this.leader;
+      if (you > opp * 1.04 && you > 300) lead = 'you';
+      else if (opp > you * 1.04 && opp > 300) lead = 'opp';
+      document.querySelector('#vs-card .you')!.classList.toggle('lead', lead === 'you');
+      document.querySelector('#vs-card .opp')!.classList.toggle('lead', lead === 'opp');
+      if (lead !== this.leader) {
+        const elapsed = now - room.startTime;
+        if (this.leader !== null && room.status === 'playing' && elapsed > 25_000 && performance.now() - this.lastLeadBanner > 8000) {
+          this.lastLeadBanner = performance.now();
+          const b = $('lead-banner');
+          b.className = lead === 'you' ? 'you' : 'opp';
+          b.textContent = lead === 'you' ? 'YOU TAKE THE LEAD! 🚀' : 'OPPONENT TAKES THE LEAD! 😱';
+          b.classList.remove('hidden');
+          void b.offsetWidth;
+          b.style.animation = 'none'; void b.offsetWidth; b.style.animation = '';
+          this.audio.play(lead === 'you' ? 'upgrade' : 'notify');
+          setTimeout(() => b.classList.add('hidden'), 2400);
+        }
+        this.leader = lead;
+      }
     } else if (biz) {
       const pct = Math.min(100, Math.floor((biz.cash / COOP_GOAL.cost) * 100));
-      opp.className = 'stat';
-      opp.innerHTML = `🎯 ${COOP_GOAL.name}: ${pct}%<div class="goal-bar"><div style="width:${pct}%"></div></div>`;
-      vs.textContent = room.mode === 'coop' ? '🤝 TEAM GOAL' : '🎮 SOLO';
-    }
-
-    // Ping (throttled to 1 Hz)
-    if (performance.now() - this.lastPing > 1000) {
-      this.lastPing = performance.now();
-      const r = Math.round(this.net.rtt);
-      const icon = this.net.status !== 'online' ? '🔴' : r < 80 ? '🟢' : r < 180 ? '🟡' : '🔴';
-      $('hud-ping').textContent = this.net.status !== 'online' ? '🔴 offline' : `${icon} ${r} ms`;
+      const miss = megaMallMissing(biz).filter((m) => !m.startsWith('$')).length;
+      $('goal-line').textContent = `${room.mode === 'coop' ? '🎯 TEAM GOAL' : '🎯 GOAL'}: ${COOP_GOAL.name} · $${formatMoney(biz.cash)} / $${formatMoney(COOP_GOAL.cost)}${miss ? ` · ещё ${miss} условия` : ''}`;
+      $('goal-fill').style.width = `${pct}%`;
     }
 
     // Opponent reconnecting
     const waiting = room.players.filter((p) => !p.connected && p.id !== this.ctx.myId());
     const ow = $('opp-wait');
-    if (waiting.length && room.status !== 'lobby') {
+    if (waiting.length) {
       const p = waiting[0];
       const sec = Math.max(0, Math.ceil(((p.graceUntil ?? now) - now) / 1000));
       ow.textContent = `⏳ ${p.name} переподключается… ${sec}с`;
       ow.classList.remove('hidden');
     } else ow.classList.add('hidden');
 
-    this.renderEvent(room.event, now);
+    this.renderEvent(room.event, now, room);
     if (this.panelOpen) this.renderPanel();
   }
 
-  private renderEvent(ev: ActiveEvent | null, now: number) {
+  private renderEvent(ev: ActiveEvent | null, now: number, room: RoomSnapshot) {
     const el = $('event-banner');
     if (!ev) { el.classList.add('hidden'); this.eventKey = ''; return; }
     const info = EVENT_INFO[ev.kind];
     const sec = Math.max(0, Math.ceil((ev.endsAt - now) / 1000));
     let extra = '';
     if (ev.kind === 'delivery') {
-      const mine = this.ctx.room() && this.myBiz(this.ctx.room()!);
+      const mine = this.myBiz(room);
       extra = ` · твои ящики: ${mine ? ev.crates?.[mine.id]?.length ?? 0 : 0}`;
     }
     if (ev.kind === 'vip' && ev.reward) extra = ` · платит $${formatMoney(ev.reward)}`;
-    if (ev.kind === 'power') extra = ` · рубильники: ${(ev.switches ?? []).map((t) => (t && now - t < 5000 ? '🟢' : '🔴')).join(' ')}`;
+    if (ev.kind === 'power') extra = ` · генераторы: ${(ev.switches ?? []).map((t) => (t && now - t < 5000 ? '🟢' : '🔴')).join(' ')}`;
     el.innerHTML = `${info.icon} ${info.title} · ${sec}с<small>${info.desc}${extra}</small>`;
     el.classList.remove('hidden');
     const key = `${ev.kind}${ev.startedAt}`;
-    if (key !== this.eventKey) { this.eventKey = key; this.audio.play('notify'); }
+    if (key !== this.eventKey) { this.eventKey = key; this.audio.play('event'); }
   }
 
   // ------------------------------------------------------------ panel
@@ -199,44 +266,43 @@ export class Hud implements HudSink {
     if (!room) return;
     const b = this.myBiz(room);
     if (!b) return;
-    const tabs: [Tab, string][] = [['build', '🏢 Здание'], ['upgrades', '⬆️ Улучшения'], ['staff', '👷 Персонал']];
+    const tabs: [Tab, string][] = [['build', '🏢 Бизнесы'], ['upgrades', '⬆️ Улучшения'], ['staff', '👷 Персонал']];
     if (room.mode !== 'vs') tabs.push(['goal', '🎯 Mega Mall']);
-    const key = JSON.stringify([this.tab, b.cash, b.tier, b.upgrades, b.workers, b.structures, room.status, room.mode]);
+    const key = JSON.stringify([this.tab, b.cash, b.tier, b.upgrades, b.workers, b.venues, b.structures, room.status, room.mode]);
     if (key === this.lastPanelKey) return;
     this.lastPanelKey = key;
     $('panel-tabs').innerHTML = tabs.map(([t, l]) => `<button data-tab="${t}" class="${t === this.tab ? 'on' : ''}">${l}</button>`).join('');
     const r = computeRates(b);
-    $('panel-cash').innerHTML = `💰 $${formatMoney(b.cash)} <span class="muted small">· $${r.price}/клиент · ${(r.spawnRate * 60).toFixed(0)} клиентов/мин</span>`;
+    $('panel-cash').innerHTML = `💰 $${formatMoney(b.cash)} <span class="muted small">· 📈 $${formatMoney(this.ctx.ipm(b.id))}/мин · касса $${r.price}/клиент</span>`;
     const rows: string[] = [];
     const btn = (ok: boolean, code: string, price: number, data: string) => {
       if (code === 'MAXED') return `<button class="btn ghost" disabled>MAX</button>`;
       if (code === 'LOCKED') return `<button class="btn ghost" disabled>🔒</button>`;
       return `<button class="btn ${ok ? 'green' : 'ghost'}" ${ok ? '' : 'disabled'} ${data}>$${formatMoney(price)}</button>`;
     };
-    const lvl_ = (n: number, max: number) => `<div class="lvl">${Array.from({ length: max }, (_, i) => `<i class="${i < n ? 'on' : ''}"></i>`).join('')}</div>`;
     const lvl = (n: number, max: number) => `<div class="lvl">${Array.from({ length: max }, (_, i) => `<i class="${i < n ? 'on' : ''}"></i>`).join('')}</div>`;
 
     if (this.tab === 'build') {
       const c = checkTier(b);
       const next = TIERS[b.tier];
-      rows.push(`<div class="shop-row big"><div class="ico">🏗️</div><div class="info"><div class="title">HQ LEVEL ${b.tier}: ${b.tier ? TIERS[b.tier - 1].name : 'пустой участок'}</div>
-        <div class="desc">${next ? `Следующий: ${next.icon} ${next.name} — больше клиентов, выше цена` : 'Максимальный уровень!'}</div>${lvl(b.tier, 10)}</div>
+      rows.push(`<div class="shop-row big"><div class="ico">${b.tier ? TIERS[b.tier - 1].icon : '🏗️'}</div><div class="info"><div class="title">HQ ${b.tier}: ${b.tier ? TIERS[b.tier - 1].name : 'пустой участок'}</div>
+        <div class="desc">${next ? `Далее: ${next.icon} ${next.name} — больше клиентов, выше цены` : 'Максимальный уровень!'}</div>${lvl(b.tier, 10)}</div>
         ${btn(c.ok, c.ok ? '' : c.code, c.ok ? c.cost : next?.cost ?? 0, 'data-buy="tier"')}</div>`);
       for (const vid of VENUE_IDS) {
         const d = VENUES[vid];
-        const lvl = b.venues[vid];
+        const lv = b.venues[vid];
         const c = checkVenue(b, vid);
-        const locked = lvl === 0 && !venueUnlocked(b, vid);
-        rows.push(`<div class="shop-row"><div class="ico">${d.icon}</div><div class="info"><div class="title">${d.name}${lvl ? ` ★${lvl}` : ''}</div>
-          <div class="desc">${lvl ? 'Расширить: больше клиентов и выше чек' : `Новый бизнес · $${d.price}/клиент`}${locked ? ` · нужен HQ ур. ${d.minTier} и предыдущий бизнес` : ''}</div>${lvl ? lvl_(lvl, ECONOMY.venueLevelMult.length) : ''}</div>
-          ${btn(c.ok, c.ok ? '' : c.code, venueCost(vid, lvl), `data-venue="${vid}"`)}</div>`);
+        const locked = lv === 0 && !venueUnlocked(b, vid);
+        rows.push(`<div class="shop-row"><div class="ico">${d.icon}</div><div class="info"><div class="title">${d.name}${lv ? ` ★${lv}` : ''}</div>
+          <div class="desc">${lv ? 'Расширить: больше клиентов и выше чек' : `Новый бизнес · $${d.price}/клиент`}${locked ? ` · нужен HQ ${d.minTier} и предыдущий бизнес` : ''}</div>${lv ? lvl(lv, ECONOMY.venueLevelMult.length) : ''}</div>
+          ${btn(c.ok, c.ok ? '' : c.code, venueCost(vid, lv), `data-venue="${vid}"`)}</div>`);
       }
       for (const id of STRUCTURE_IDS) {
         const d = STRUCTURES[id];
         const cs = checkStructure(b, id);
         const locked = !cs.ok && cs.code === 'LOCKED';
         rows.push(`<div class="shop-row"><div class="ico">${d.icon}</div><div class="info"><div class="title">${d.name}</div>
-          <div class="desc">${d.desc}${locked ? ` · нужен уровень ${d.minTier}` : ''}</div></div>
+          <div class="desc">${d.desc}${locked ? ` · нужен HQ ${d.minTier}` : ''}</div></div>
           ${btn(cs.ok, cs.ok ? '' : cs.code, d.cost, `data-struct="${id}"`)}</div>`);
       }
     } else if (this.tab === 'upgrades') {
@@ -258,13 +324,13 @@ export class Hud implements HudSink {
     } else {
       const miss = megaMallMissing(b);
       const reqs = [
-        [`Здание уровня ${COOP_GOAL.minTier}+`, b.tier >= COOP_GOAL.minTier],
+        [`HQ уровня ${COOP_GOAL.minTier}+ (${TIERS[COOP_GOAL.minTier - 1].name})`, b.tier >= COOP_GOAL.minTier],
         ...Object.entries(COOP_GOAL.minUpgrades).map(([k, v]) => [`${UPGRADES[k as keyof typeof UPGRADES].name} ур. ${v}+`, b.upgrades[k as keyof typeof UPGRADES] >= (v ?? 0)]),
         [`$${formatMoney(COOP_GOAL.cost)} в кассе`, b.cash >= COOP_GOAL.cost],
       ] as [string, boolean][];
       rows.push(`<div class="shop-row big"><div class="ico">🏬</div><div class="info"><div class="title">BUILD THE MEGA MALL</div>
         <div class="desc">Общая цель команды. Постройте до конца таймера!</div>
-        ${reqs.map(([t, ok]) => `<div class="req ${ok ? 'ok' : 'no'}">${ok ? '✓' : '✗'} ${t}</div>`).join('')}</div></div>`);
+        ${reqs.map(([tx, ok]) => `<div class="req ${ok ? 'ok' : 'no'}">${ok ? '✓' : '✗'} ${tx}</div>`).join('')}</div></div>`);
       rows.push(`<button class="btn orange" data-mega="1" ${miss.length ? 'disabled' : ''}>🏗️ ПОСТРОИТЬ MEGA MALL</button>`);
     }
     $('panel-body').innerHTML = rows.join('');

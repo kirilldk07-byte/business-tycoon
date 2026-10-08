@@ -37,7 +37,7 @@ export class CustomerManager {
   private v = new THREE.Vector3();
   visibleCount = 0;
 
-  constructor(private root: THREE.Object3D, private crowd: Crowd, private maxVisible: number) {}
+  constructor(private root: THREE.Object3D, private crowd: Crowd, public maxVisible: number) {}
 
   private cumulative(path: P2[]) {
     const c = [0];

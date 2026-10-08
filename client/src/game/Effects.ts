@@ -5,6 +5,7 @@ import * as THREE from 'three';
 interface Particle { pos: THREE.Vector3; vel: THREE.Vector3; life: number; max: number; color: THREE.Color; size: number; spin: number; rot: number; gravity: number }
 
 const MAX = 600;
+const FLOAT_POOL = 24;
 
 export class Effects {
   private mesh: THREE.InstancedMesh;
@@ -13,6 +14,7 @@ export class Effects {
   private floatLayer: HTMLElement;
   private floats: { el: HTMLElement; pos: THREE.Vector3; born: number; dur: number }[] = [];
   private tmp = new THREE.Vector3();
+  private pool: HTMLElement[] = [];
 
   constructor(scene: THREE.Scene, private camera: THREE.Camera, layer: HTMLElement) {
     this.mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ color: 0xffffff }), MAX);
@@ -56,12 +58,16 @@ export class Effects {
     }
   }
 
+  /** Pooled DOM labels: at most POOL elements ever exist; oldest is recycled. */
   floatText(at: THREE.Vector3, text: string, cls = 'money') {
-    if (this.floats.length > 40) { this.floats.shift()!.el.remove(); }
-    const el = document.createElement('div');
+    let el = this.pool.pop();
+    if (!el) {
+      if (this.floats.length >= FLOAT_POOL) { const old = this.floats.shift()!; el = old.el; }
+      else { el = document.createElement('div'); this.floatLayer.appendChild(el); }
+    }
     el.className = `float-text ${cls}`;
     el.textContent = text;
-    this.floatLayer.appendChild(el);
+    el.style.display = '';
     this.floats.push({ el, pos: at.clone(), born: performance.now(), dur: cls === 'big' ? 2200 : 1300 });
   }
 
@@ -93,7 +99,7 @@ export class Effects {
     for (let i = this.floats.length - 1; i >= 0; i--) {
       const f = this.floats[i];
       const t = (now - f.born) / f.dur;
-      if (t >= 1) { f.el.remove(); this.floats.splice(i, 1); continue; }
+      if (t >= 1) { f.el.style.display = 'none'; this.pool.push(f.el); this.floats.splice(i, 1); continue; }
       this.tmp.copy(f.pos);
       this.tmp.y += t * 2.2;
       this.tmp.project(this.camera);
@@ -105,7 +111,7 @@ export class Effects {
 
   clear() {
     this.parts = [];
-    for (const f of this.floats) f.el.remove();
+    for (const f of this.floats) { f.el.style.display = 'none'; this.pool.push(f.el); }
     this.floats = [];
   }
 }

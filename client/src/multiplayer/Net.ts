@@ -17,6 +17,9 @@ export class Net {
   private ws: WebSocket | null = null;
   private handlers = new Map<string, Set<(m: ServerMsg) => void>>();
   private statusHandlers = new Set<(s: NetStatus) => void>();
+  private attemptHandlers = new Set<() => void>();
+  /** Reconnect attempts since the connection was lost (for the UI). */
+  attempts = 0;
   private attempt = 0;
   private pingTimer = 0;
   private offsetSamples: { rtt: number; off: number }[] = [];
@@ -47,6 +50,7 @@ export class Net {
     this.ws = ws;
     ws.onopen = () => {
       this.attempt = 0;
+      this.attempts = 0;
       const saved = LocalStore.get();
       this.send({ t: C2S.HELLO, v: PROTOCOL_VERSION, profileId: saved.profileId, secret: saved.secret, name: this.nameProvider() });
       this.startPing();
@@ -69,6 +73,8 @@ export class Net {
   private scheduleReconnect() {
     this.setStatus(this.welcomed ? 'reconnecting' : 'offline');
     const delay = Math.min(5000, 400 * Math.pow(1.7, this.attempt++));
+    this.attempts++;
+    this.attemptHandlers.forEach((h) => h());
     setTimeout(() => this.connect(), Math.max(delay, this.blockedUntil - Date.now()));
   }
 
@@ -145,6 +151,7 @@ export class Net {
   }
 
   onStatus(h: (s: NetStatus) => void) { this.statusHandlers.add(h); }
+  onAttempt(h: () => void) { this.attemptHandlers.add(h); }
   private setStatus(s: NetStatus) {
     if (s === this.status) return;
     this.status = s;

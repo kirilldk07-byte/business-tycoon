@@ -91,6 +91,8 @@ export class Input {
           this.moveX = this.moveY = 0;
           this.joyKnob.style.transform = 'translate(-50%, -50%)';
           this.joyBase.classList.remove('active');
+          this.joyBase.style.left = '';
+          this.joyBase.style.top = '';
         }
         if (t.identifier === this.camTouchId) this.camTouchId = null;
       }

@@ -4,12 +4,12 @@ import { MEGA_MALL_PLOT, PLOT_LOCAL, PLOTS, POWER_SWITCHES, WORLD_BOUNDS, plotTo
 import { formatMoney } from '../../../shared/game/economy';
 import { q2 } from '../../../shared/protocol/codec';
 import { C2S, EMOTES, EMOTE_COOLDOWN_MS, S2C, type InteractTarget, type MoveTuple } from '../../../shared/protocol/messages';
-import { ANIM, type ActiveEvent, type BusinessState, type PlayerPublic, type RoomSnapshot } from '../../../shared/types/state';
+import { ANIM, type ActiveEvent, type MatchResult, type BusinessState, type PlayerPublic, type RoomSnapshot } from '../../../shared/types/state';
 import type { AudioManager } from '../audio/AudioManager';
 import { createConstructionSite, createCrate, createDeliveryTruck, createMegaMall } from '../business/BuildingFactory';
 import { BusinessView, type PadDef } from '../business/BusinessView';
 import { CLIENT, isTouch } from '../config/client';
-import { resolveQuality, type Quality } from '../config/quality';
+import { lowerQuality, qualitySetting, resolveQuality, type Quality } from '../config/quality';
 import { Interpolator } from '../multiplayer/Interpolator';
 import type { Net } from '../multiplayer/Net';
 import { Character } from '../player/Character';
@@ -19,7 +19,7 @@ import { Effects } from './Effects';
 import { Input } from './Input';
 
 export interface HudSink {
-  prompt(text: string | null): void;
+  prompt(text: string | null, locked?: boolean): void;
   toast(text: string, kind?: 'info' | 'good' | 'bad'): void;
   flashMoney(): void;
 }
@@ -496,6 +496,8 @@ export class Game {
       this.camera.lookAt(0, 2, 0);
     }
     this.effects.update(dt);
+    this.updateTutorialArrow();
+    this.watchFps(dt);
     this.world.crowd.commit();
     this.renderer.render(this.scene, this.camera);
   }
@@ -531,7 +533,7 @@ export class Game {
 
     // Interaction
     this.currentTarget = this.findTarget();
-    this.hud.prompt(this.currentTarget ? `${isTouch ? '' : 'E — '}${this.currentTarget.label}` : null);
+    this.hud.prompt(this.currentTarget ? `${isTouch ? '' : 'E — '}${this.currentTarget.label}` : null, this.currentTarget?.pad?.state === 'locked');
     if (this.input.consumeInteract() && this.currentTarget && room.status === 'playing') {
       const ct = this.currentTarget;
       this.interactUntil = performance.now() + 350;
@@ -676,6 +678,94 @@ export class Game {
   celebrate(win: boolean) {
     if (win) {
       for (let i = 0; i < 4; i++) setTimeout(() => this.effects.burst(this.myPos.clone().setY(2), 'confetti', 80), i * 350);
+    }
+  }
+
+  // ---------------------------------------------------------- end of match
+
+  /** Server result arrived: fly the camera over both businesses, confetti at the winner. */
+  endCinematic(result: MatchResult) {
+    const won = result.winnerIds.includes(this.myId ?? '');
+    if (result.mode === 'vs') {
+      this.rig.setOverride(new THREE.Vector3(0, 52, 62), new THREE.Vector3(0, 4, 0));
+      const winner = result.winnerIds[0];
+      const pos = winner === this.myId ? this.myPos : this.players.get(winner ?? '')?.pos;
+      if (pos) for (let i = 0; i < 5; i++) setTimeout(() => this.effects.burst(pos.clone().setY(2.5), 'confetti', 90), 300 + i * 380);
+      const wb = this.room?.businesses.find((b) => b.ownerIds.includes(winner ?? ''));
+      if (wb) { const p = PLOTS[wb.plot]; this.effects.burst(new THREE.Vector3(p.x, 18, p.z), 'confetti', 160); }
+    } else {
+      const p = PLOTS[MEGA_MALL_PLOT];
+      if (won) {
+        this.rig.setOverride(new THREE.Vector3(p.x * 0.35, 30, 48), new THREE.Vector3(p.x, 8, p.z));
+        for (let i = 0; i < 6; i++) setTimeout(() => this.effects.burst(new THREE.Vector3(p.x, 22, p.z), 'confetti', 150), i * 400);
+      } else this.rig.setOverride(new THREE.Vector3(0, 46, 60), new THREE.Vector3(0, 4, 0));
+    }
+    this.celebrate(won);
+    setTimeout(() => this.rig.setOverride(null), 9000);
+  }
+
+  // ---------------------------------------------------------- tutorial arrow
+
+  private tutorialArrow: THREE.Group | null = null;
+  private tutorialKey: string | null = null;
+
+  setTutorialPad(key: string | null) {
+    this.tutorialKey = key;
+    if (!key) { if (this.tutorialArrow) this.tutorialArrow.visible = false; return; }
+    if (!this.tutorialArrow) {
+      const g = new THREE.Group();
+      const mat = new THREE.MeshBasicMaterial({ color: 0x22c55e });
+      const cone = new THREE.Mesh(new THREE.ConeGeometry(0.7, 1.4, 4), mat);
+      cone.rotation.x = Math.PI;
+      const stem = new THREE.Mesh(new THREE.BoxGeometry(0.4, 1.2, 0.4), mat);
+      stem.position.y = 1.2;
+      g.add(cone, stem);
+      this.scene.add(g);
+      this.tutorialArrow = g;
+    }
+  }
+
+  private updateTutorialArrow() {
+    const a = this.tutorialArrow;
+    if (!a || !this.tutorialKey) return;
+    let found = false;
+    for (const v of this.views.values()) {
+      if (!v.isMine) continue;
+      const pad = v.padTargets().find((p) => p.def.key === this.tutorialKey);
+      if (pad) { a.position.set(pad.x, 4.2 + Math.abs(Math.sin(this.elapsed * 3)) * 0.8, pad.z); a.rotation.y = this.elapsed * 2; found = true; }
+    }
+    a.visible = found;
+  }
+
+  // ---------------------------------------------------------- quality
+
+  fps = 60;
+  private lowFpsFor = 0;
+
+  applyQuality(q: Quality) {
+    this.quality = q;
+    this.renderer.setPixelRatio(q.pixelRatio);
+    this.renderer.shadowMap.enabled = q.shadows;
+    this.world.sun.castShadow = q.shadows;
+    if (this.world.sun.shadow.mapSize.x !== q.shadowMap) {
+      this.world.sun.shadow.mapSize.set(q.shadowMap, q.shadowMap);
+      this.world.sun.shadow.map?.dispose();
+      this.world.sun.shadow.map = null;
+    }
+    this.scene.traverse((o) => { const m = (o as THREE.Mesh).material as THREE.Material | undefined; if (m) m.needsUpdate = true; });
+    for (const v of this.views.values()) v.customers.maxVisible = q.maxNpcs;
+    this.resize();
+  }
+
+  /** AUTO quality: step down if the device can't hold ~30 FPS. */
+  private watchFps(dt: number) {
+    this.fps += (1 / Math.max(dt, 0.001) - this.fps) * 0.05;
+    if (qualitySetting() !== 'auto' || !this.inMatch) return;
+    this.lowFpsFor = this.fps < 30 ? this.lowFpsFor + dt : 0;
+    if (this.lowFpsFor > 6) {
+      this.lowFpsFor = 0;
+      const lower = lowerQuality(this.quality);
+      if (lower) { this.applyQuality(lower); console.info('[quality] auto-lowered to', lower.name); }
     }
   }
 }
