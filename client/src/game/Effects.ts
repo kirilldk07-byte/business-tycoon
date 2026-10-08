@@ -5,7 +5,7 @@ import * as THREE from 'three';
 interface Particle { pos: THREE.Vector3; vel: THREE.Vector3; life: number; max: number; color: THREE.Color; size: number; spin: number; rot: number; gravity: number }
 
 const MAX = 600;
-const FLOAT_POOL = 24;
+const FLOAT_POOL = 14; // hard cap on simultaneous floating labels — the game stays readable
 
 export class Effects {
   private mesh: THREE.InstancedMesh;
@@ -15,6 +15,8 @@ export class Effects {
   private floats: { el: HTMLElement; pos: THREE.Vector3; born: number; dur: number }[] = [];
   private tmp = new THREE.Vector3();
   private pool: HTMLElement[] = [];
+  private flashes: { m: THREE.Mesh; t: number; r: number }[] = [];
+  private flashGeo = new THREE.SphereGeometry(1, 16, 10);
 
   constructor(scene: THREE.Scene, private camera: THREE.Camera, layer: HTMLElement) {
     this.mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ color: 0xffffff }), MAX);
@@ -58,6 +60,22 @@ export class Effects {
     }
   }
 
+  /** Short additive light pop (build complete). Reuses up to 3 meshes. */
+  flash(at: THREE.Vector3, radius = 6) {
+    let f = this.flashes.find((x) => x.t >= 1);
+    if (!f) {
+      if (this.flashes.length >= 3) return;
+      const m = new THREE.Mesh(this.flashGeo, new THREE.MeshBasicMaterial({ color: 0xfff7d6, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+      m.frustumCulled = false;
+      this.mesh.parent!.add(m);
+      f = { m, t: 1, r: radius };
+      this.flashes.push(f);
+    }
+    f.t = 0; f.r = radius;
+    f.m.position.copy(at);
+    f.m.visible = true;
+  }
+
   /** Pooled DOM labels: at most POOL elements ever exist; oldest is recycled. */
   floatText(at: THREE.Vector3, text: string, cls = 'money') {
     let el = this.pool.pop();
@@ -93,6 +111,14 @@ export class Effects {
     this.mesh.count = n;
     this.mesh.instanceMatrix.needsUpdate = true;
     if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
+
+    for (const f of this.flashes) {
+      if (f.t >= 1) continue;
+      f.t = Math.min(1, f.t + dt / 0.45);
+      f.m.scale.setScalar(f.r * (0.3 + 0.9 * Math.sqrt(f.t)));
+      (f.m.material as THREE.MeshBasicMaterial).opacity = 0.85 * (1 - f.t) * (1 - f.t);
+      if (f.t >= 1) f.m.visible = false;
+    }
 
     const now = performance.now();
     const w = window.innerWidth, h = window.innerHeight;

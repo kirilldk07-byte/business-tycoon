@@ -8,7 +8,7 @@ import type { AABB } from '../world/World';
  */
 export class CameraRig {
   yaw = Math.PI / 2;
-  pitch = 0.5;
+  pitch = 0.4;
   wantDist = 16;
   private dist = 16;
   private pivot = new THREE.Vector3();
@@ -18,6 +18,9 @@ export class CameraRig {
   private override: { pos: THREE.Vector3; look: THREE.Vector3; t: number } | null = null;
   private tmpDir = new THREE.Vector3();
   private want = new THREE.Vector3();
+  private look = new THREE.Vector3();
+  /** Aim above the head so the hero sits in the lower third and the business fills the frame. */
+  lookLift = 2.4;
 
   constructor(private camera: THREE.PerspectiveCamera) {}
 
@@ -26,6 +29,7 @@ export class CameraRig {
 
   setAspect(portrait: boolean) {
     this.baseFov = portrait ? 68 : 55;
+    this.lookLift = portrait ? 3.4 : 2.4;
   }
 
   rotate(dx: number, dy: number, zoom: number) {
@@ -82,7 +86,9 @@ export class CameraRig {
       cam.position.y += (Math.random() - 0.5) * s;
       this.shakeAmt *= Math.exp(-dt * 9);
     }
-    cam.lookAt(this.pivot);
+    // Lift the aim less when looking steeply down (otherwise the hero leaves the frame).
+    const lift = this.lookLift * (1 - Math.min(1, this.pitch / CameraRig.MAX_PITCH) * 0.8);
+    cam.lookAt(this.look.copy(this.pivot).setY(this.pivot.y + lift));
     this.applyFov(dt, speed);
   }
 

@@ -25,17 +25,19 @@
       <div class="conn" id="conn-chip"><i></i><span>Connecting…</span></div>
     </div>
     <div class="logo big"><span>BUSINESS</span><b>TYCOON</b><i>бизнес на двоих</i></div>
-    <div class="menu-buttons">
-      <button class="btn green" data-act="solo">🎮 SOLO</button>
-      <button class="btn blue" data-act="friend">👥 PLAY WITH FRIEND</button>
-      <button class="btn orange" data-act="quick">⚡ QUICK MATCH</button>
-      <div class="row">
-        <button class="btn yellow" data-act="leaderboard">🏆 LEADERBOARD</button>
-        <button class="btn purple" data-act="shop">🛒 SHOP</button>
+    <div class="menu-bottom">
+      <div class="menu-buttons">
+        <button class="btn green" data-act="solo">🎮 SOLO</button>
+        <button class="btn blue hero" data-act="friend">👥 PLAY WITH FRIEND</button>
+        <button class="btn orange" data-act="quick">⚡ QUICK MATCH</button>
       </div>
-      <button class="btn ghost" data-act="settings">⚙ SETTINGS</button>
+      <div class="menu-icons">
+        <button class="round-ico" data-act="leaderboard" title="Leaderboard" aria-label="Leaderboard">🏆</button>
+        <button class="round-ico" data-act="shop" title="Shop" aria-label="Shop">🛒</button>
+        <button class="round-ico" data-act="settings" title="Settings" aria-label="Settings">⚙️</button>
+      </div>
+      <div class="profile-line" id="profile-line"></div>
     </div>
-    <div class="profile-line" id="profile-line"></div>
   </div>
 
   <!-- FRIEND -->
@@ -68,17 +70,14 @@
   <div id="lobby" class="screen">
     <div class="card wide">
       <div class="lobby-head">
-        <div>
-          <div class="muted small" id="lobby-hint">ROOM CODE</div>
-          <div class="room-code" id="room-code">——————</div>
-        </div>
+        <div class="muted small" id="lobby-hint">ROOM CODE</div>
+        <div class="room-code" id="room-code">——————</div>
         <div class="code-actions">
-          <button class="btn small" data-act="copy">📋 COPY CODE</button>
+          <button class="btn small" data-act="copy">📋 COPY</button>
           <button class="btn small" data-act="share" id="btn-share">📤 SHARE</button>
           <button class="btn small ghost" data-act="copy-link">🔗 Ссылка</button>
         </div>
       </div>
-      <div class="waiting" id="lobby-waiting"><span class="dots"></span> WAITING FOR PLAYER…</div>
       <div class="players" id="lobby-players"></div>
       <div class="mode-row">
         <span class="muted">MODE:</span>

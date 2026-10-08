@@ -131,17 +131,35 @@ export class World {
       if (Math.abs(z) < 40 && Math.abs(x) < 78) continue;
       b.flat(8 + rnd() * 14, 6 + rnd() * 10, PAL.grassDark, x, 0.005, z, rnd() * 3);
     }
-    // Plot paving (checker tiles)
+    // Plot paving: 2 m stone tiles with subtle per-tile tint, a warm brick
+    // boulevard from the entrance to the HQ, and a striped loading zone.
+    const trnd = mulberry(9);
     for (const p of PLOTS) {
       const hx = PLOT_HALF.x, hz = PLOT_HALF.z;
       b.flat(hx * 2 + 0.6, hz * 2 + 0.6, PAL.curb, p.x, 0.012, p.z);
-      const tile = 4;
+      const tile = 2;
+      const tint = new THREE.Color();
       for (let ix = -hx; ix < hx; ix += tile) {
         for (let iz = -hz; iz < hz; iz += tile) {
-          const c = ((ix + iz) / tile) % 2 === 0 ? PAL.paving : PAL.pavingDark;
-          b.flat(tile - 0.08, tile - 0.08, c, p.x + ix + tile / 2, 0.02, p.z + iz + tile / 2);
+          const base = (Math.floor(ix / tile) + Math.floor(iz / tile)) % 2 === 0 ? PAL.paving : PAL.pavingDark;
+          tint.setHex(base).offsetHSL(0, 0, (trnd() - 0.5) * 0.035);
+          b.flat(tile - 0.07, tile - 0.07, tint.getHex(), p.x + ix + tile / 2, 0.02, p.z + iz + tile / 2);
         }
       }
+      // Boulevard (plot-local lx from the HQ front to the entrance), herringbone-ish bricks
+      const lx0 = -9, lx1 = hx;
+      for (let lx = lx0; lx < lx1; lx += 1.5) {
+        for (let lz = -2.25; lz < 2.25; lz += 1.5) {
+          const c = (Math.floor(lx / 1.5) + Math.floor(lz / 1.5)) % 2 === 0 ? 0xd9a77c : 0xcf9b70;
+          b.flat(1.42, 1.42, c, p.x + p.dir * (lx + 0.75), 0.026, p.z + lz + 0.75);
+        }
+      }
+      for (const s of [-1, 1]) b.flat((lx1 - lx0), 0.3, 0xa16207, p.x + p.dir * (lx0 + lx1) / 2, 0.028, p.z + s * 2.4);
+      // Loading zone (delivery van / crate drops), yellow-black hatch
+      const zx = p.x + p.dir * 16, zz = p.z - p.dir * 7;
+      b.flat(7.4, 5.6, 0x3f3f46, zx, 0.027, zz);
+      for (let i = -3; i <= 3; i++) b.flat(0.45, 4.4, 0xfacc15, zx + i * 1.0, 0.029, zz, 0.5);
+      b.flat(7.4, 0.25, 0xfacc15, zx, 0.03, zz - 2.8); b.flat(7.4, 0.25, 0xfacc15, zx, 0.03, zz + 2.8);
     }
   }
 
@@ -364,6 +382,16 @@ export class World {
         else this.tower(b, cx, cz, Math.min(w - 1.2, 10), d, 8 + Math.floor(rnd() * 8), sz, rnd);
         x += w;
       }
+    }
+    // Distant metropolis: cheap silhouettes far outside the playable area, tinted by fog.
+    const far = [0x94a3b8, 0xa5b4c8, 0x8ea3bd, 0xb6c2d4, 0x7f93ad];
+    for (let i = 0; i < 90; i++) {
+      const a = (i / 90) * Math.PI * 2 + rnd() * 0.05;
+      const r = 135 + rnd() * 50;
+      const w = 10 + rnd() * 14, h = 18 + Math.pow(rnd(), 1.6) * 70;
+      const cx = Math.cos(a) * r * 1.1, cz = Math.sin(a) * r;
+      b.box(w, h, w * (0.7 + rnd() * 0.6), far[i % far.length], cx, 0, cz);
+      if (h > 55) b.box(w * 0.5, h * 0.12, w * 0.5, far[(i + 2) % far.length], cx, h, cz);
     }
     // Far east/west skyline behind the plots
     for (const sx of [-1, 1]) {

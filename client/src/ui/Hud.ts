@@ -4,7 +4,8 @@ import {
 } from '../../../shared/constants/config';
 import { EVENT_INFO } from '../../../shared/events';
 import {
-  checkStructure, checkTier, checkUpgrade, checkVenue, checkWorker, computeRates, formatMoney, megaMallMissing, upgradeCost,
+  checkStructure, checkTier, checkUpgrade, checkVenue, checkWorker, computeRates, formatMoney, incomeGain, megaMallMissing, upgradeCost,
+  type Purchase,
   venueCost, venueUnlocked, workerCost,
 } from '../../../shared/game/economy';
 import { C2S, EMOTES, EMOTE_COOLDOWN_MS } from '../../../shared/protocol/messages';
@@ -158,14 +159,14 @@ export class Hud implements HudSink {
     let text = '';
     if (room.status === 'countdown' || (left > -900 && left < 3500)) {
       if (left > 0) text = String(Math.ceil(left / 1000));
-      else if (left > -900) text = 'BUILD!';
+      else if (left > -900) text = 'GO!';
     }
     if (text !== this.lastCountdown) {
       this.lastCountdown = text;
       if (text) {
         cd.innerHTML = `<span>${text}</span>`;
-        cd.classList.toggle('go', text === 'BUILD!');
-        this.audio.play(text === 'BUILD!' ? 'go' : 'countdown');
+        cd.classList.toggle('go', text === 'GO!');
+        this.audio.play(text === 'GO!' ? 'go' : 'countdown');
       }
       cd.classList.toggle('hidden', !text);
     }
@@ -211,7 +212,7 @@ export class Hud implements HudSink {
           this.lastLeadBanner = performance.now();
           const b = $('lead-banner');
           b.className = lead === 'you' ? 'you' : 'opp';
-          b.textContent = lead === 'you' ? 'YOU TAKE THE LEAD! 🚀' : 'OPPONENT TAKES THE LEAD! 😱';
+          b.textContent = lead === 'you' ? 'YOU TAKE THE LEAD! 🚀' : 'RIVAL TAKES THE LEAD! 😱';
           b.classList.remove('hidden');
           void b.offsetWidth;
           b.style.animation = 'none'; void b.offsetWidth; b.style.animation = '';
@@ -280,13 +281,22 @@ export class Hud implements HudSink {
       if (code === 'LOCKED') return `<button class="btn ghost" disabled>🔒</button>`;
       return `<button class="btn ${ok ? 'green' : 'ghost'}" ${ok ? '' : 'disabled'} ${data}>$${formatMoney(price)}</button>`;
     };
+    // ROI hint: "+$25/мин · окупится за 40с" — no formulas for the player.
+    const roi = (p: Purchase, price: number, open: boolean) => {
+      if (!open) return '';
+      const g = incomeGain(b, p);
+      if (g < 1) return '';
+      const pay = price / (g / 60);
+      const payTxt = pay < 90 ? `${Math.max(1, Math.round(pay))}с` : pay < 3600 ? `${Math.round(pay / 60)} мин` : '';
+      return `<div class="roi"><b>+$${formatMoney(g)}/мин</b>${payTxt ? ` · окупится за ${payTxt}` : ''}</div>`;
+    };
     const lvl = (n: number, max: number) => `<div class="lvl">${Array.from({ length: max }, (_, i) => `<i class="${i < n ? 'on' : ''}"></i>`).join('')}</div>`;
 
     if (this.tab === 'build') {
       const c = checkTier(b);
       const next = TIERS[b.tier];
       rows.push(`<div class="shop-row big"><div class="ico">${b.tier ? TIERS[b.tier - 1].icon : '🏗️'}</div><div class="info"><div class="title">HQ ${b.tier}: ${b.tier ? TIERS[b.tier - 1].name : 'пустой участок'}</div>
-        <div class="desc">${next ? `Далее: ${next.icon} ${next.name} — больше клиентов, выше цены` : 'Максимальный уровень!'}</div>${lvl(b.tier, 10)}</div>
+        <div class="desc">${next ? `Далее: ${next.icon} ${next.name} — больше клиентов, выше цены` : 'Максимальный уровень!'}</div>${roi({ kind: 'tier' }, next?.cost ?? 0, !!next && b.tier >= 1)}${lvl(b.tier, 10)}</div>
         ${btn(c.ok, c.ok ? '' : c.code, c.ok ? c.cost : next?.cost ?? 0, 'data-buy="tier"')}</div>`);
       for (const vid of VENUE_IDS) {
         const d = VENUES[vid];
@@ -294,7 +304,7 @@ export class Hud implements HudSink {
         const c = checkVenue(b, vid);
         const locked = lv === 0 && !venueUnlocked(b, vid);
         rows.push(`<div class="shop-row"><div class="ico">${d.icon}</div><div class="info"><div class="title">${d.name}${lv ? ` ★${lv}` : ''}</div>
-          <div class="desc">${lv ? 'Расширить: больше клиентов и выше чек' : `Новый бизнес · $${d.price}/клиент`}${locked ? ` · нужен HQ ${d.minTier} и предыдущий бизнес` : ''}</div>${lv ? lvl(lv, ECONOMY.venueLevelMult.length) : ''}</div>
+          <div class="desc">${lv ? 'Расширить: больше клиентов и выше чек' : `Новый бизнес · $${d.price}/клиент`}${locked ? ` · нужен HQ ${d.minTier} и предыдущий бизнес` : ''}</div>${roi({ kind: 'venue', id: vid }, venueCost(vid, lv), !locked && lv < ECONOMY.venueLevelMult.length)}${lv ? lvl(lv, ECONOMY.venueLevelMult.length) : ''}</div>
           ${btn(c.ok, c.ok ? '' : c.code, venueCost(vid, lv), `data-venue="${vid}"`)}</div>`);
       }
       for (const id of STRUCTURE_IDS) {
@@ -302,7 +312,7 @@ export class Hud implements HudSink {
         const cs = checkStructure(b, id);
         const locked = !cs.ok && cs.code === 'LOCKED';
         rows.push(`<div class="shop-row"><div class="ico">${d.icon}</div><div class="info"><div class="title">${d.name}</div>
-          <div class="desc">${d.desc}${locked ? ` · нужен HQ ${d.minTier}` : ''}</div></div>
+          <div class="desc">${d.desc}${locked ? ` · нужен HQ ${d.minTier}` : ''}</div>${roi({ kind: 'structure', id }, d.cost, !locked && !b.structures.includes(id))}</div>
           ${btn(cs.ok, cs.ok ? '' : cs.code, d.cost, `data-struct="${id}"`)}</div>`);
       }
     } else if (this.tab === 'upgrades') {
@@ -310,7 +320,7 @@ export class Hud implements HudSink {
         const d = UPGRADES[id];
         const c = checkUpgrade(b, id);
         rows.push(`<div class="shop-row"><div class="ico">${d.icon}</div><div class="info"><div class="title">${d.name} · ур. ${b.upgrades[id]}</div>
-          <div class="desc">${d.desc}</div>${lvl(b.upgrades[id], d.max)}</div>
+          <div class="desc">${d.desc}</div>${roi({ kind: 'upgrade', id }, upgradeCost(id, b.upgrades[id]), b.upgrades[id] < d.max)}${lvl(b.upgrades[id], d.max)}</div>
           ${btn(c.ok, c.ok ? '' : c.code, upgradeCost(id, b.upgrades[id]), `data-up="${id}"`)}</div>`);
       }
     } else if (this.tab === 'staff') {
@@ -318,7 +328,7 @@ export class Hud implements HudSink {
         const d = WORKERS[id];
         const c = checkWorker(b, id);
         rows.push(`<div class="shop-row"><div class="ico">${d.icon}</div><div class="info"><div class="title">${d.name} × ${b.workers[id]}</div>
-          <div class="desc">${d.desc}</div>${lvl(b.workers[id], d.max)}</div>
+          <div class="desc">${d.desc}</div>${roi({ kind: 'worker', id }, workerCost(id, b.workers[id]), b.workers[id] < d.max)}${lvl(b.workers[id], d.max)}</div>
           ${btn(c.ok, c.ok ? '' : c.code, workerCost(id, b.workers[id]), `data-hire="${id}"`)}</div>`);
       }
     } else {

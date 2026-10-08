@@ -100,6 +100,23 @@ export function incomePerMinute(b: BusinessState): number {
   return Math.round(perSec * 60);
 }
 
+export type Purchase =
+  | { kind: 'tier' } | { kind: 'upgrade'; id: UpgradeId } | { kind: 'worker'; id: WorkerId }
+  | { kind: 'venue'; id: VenueId } | { kind: 'structure'; id: StructureId };
+
+/** Extra $/minute a purchase would bring (display only — "ROI" hint in the shop). */
+export function incomeGain(b: BusinessState, p: Purchase): number {
+  const n: BusinessState = {
+    ...b, upgrades: { ...b.upgrades }, workers: { ...b.workers }, venues: { ...b.venues }, structures: [...b.structures],
+  };
+  if (p.kind === 'tier') n.tier++;
+  else if (p.kind === 'upgrade') n.upgrades[p.id]++;
+  else if (p.kind === 'worker') n.workers[p.id]++;
+  else if (p.kind === 'venue') n.venues[p.id]++;
+  else n.structures.push(p.id);
+  return Math.max(0, incomePerMinute(n) - incomePerMinute(b));
+}
+
 export function businessValue(b: BusinessState): number {
   const s = b.stats, W = VALUE_WEIGHTS;
   return Math.floor(

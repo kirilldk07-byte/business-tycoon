@@ -138,6 +138,8 @@ export class Character {
   private animTime = 0;
   private lastAnim = -1;
   private blend = 0; // 0 idle … 1 full stride (smoothed)
+  private poseTgt = new Float32Array(14);
+  private poseCur = new Float32Array(14);
   anim: number = ANIM.idle;
   private ring: THREE.Mesh;
 
@@ -302,13 +304,21 @@ export class Character {
       headX = 0.55; lean = 0.32; shL = shR = 0.25; elL = elR = -0.2; bob = -0.12; kneeL = kneeR = 0.35; thighL = thighR = -0.2;
     }
 
-    this.legL.rotation.x = thighL; this.legR.rotation.x = thighR;
-    this.shinL.rotation.x = kneeL; this.shinR.rotation.x = kneeR;
-    this.armL.rotation.set(shL, 0, armOutL); this.armR.rotation.set(shR, 0, armOutR);
-    this.foreL.rotation.x = elL; this.foreR.rotation.x = elR;
-    this.body.position.y = bob;
-    this.chest.rotation.x = lean;
-    this.head.rotation.set(headX, headY, 0);
+    // Smooth every joint toward its target: soft blend right after an animation
+    // switch (no pose snapping), near-instant follow afterwards (crisp stride).
+    const tgt = this.poseTgt;
+    tgt[0] = thighL; tgt[1] = thighR; tgt[2] = kneeL; tgt[3] = kneeR; tgt[4] = shL; tgt[5] = shR; tgt[6] = armOutL; tgt[7] = armOutR;
+    tgt[8] = elL; tgt[9] = elR; tgt[10] = bob; tgt[11] = lean; tgt[12] = headX; tgt[13] = headY;
+    const k = Math.min(1, dt * (t < 0.3 ? 12 : 40));
+    const c = this.poseCur;
+    for (let i = 0; i < c.length; i++) c[i] += (tgt[i] - c[i]) * k;
+    this.legL.rotation.x = c[0]; this.legR.rotation.x = c[1];
+    this.shinL.rotation.x = c[2]; this.shinR.rotation.x = c[3];
+    this.armL.rotation.set(c[4], 0, c[6]); this.armR.rotation.set(c[5], 0, c[7]);
+    this.foreL.rotation.x = c[8]; this.foreR.rotation.x = c[9];
+    this.body.position.y = c[10];
+    this.chest.rotation.x = c[11];
+    this.head.rotation.set(c[12], c[13], 0);
     this.body.rotation.y = a === ANIM.victory ? Math.sin(spin) * 0.6 : 0;
     this.crate.visible = a === ANIM.carry;
 

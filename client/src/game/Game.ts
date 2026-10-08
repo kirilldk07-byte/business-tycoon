@@ -1,7 +1,9 @@
 import * as THREE from 'three';
 import { EVENTS, PLAYER } from '../../../shared/constants/config';
 import { MEGA_MALL_PLOT, PLOT_LOCAL, PLOTS, POWER_SWITCHES, WORLD_BOUNDS, plotToWorld } from '../../../shared/constants/world';
-import { formatMoney } from '../../../shared/game/economy';
+import { emptyBusiness, formatMoney } from '../../../shared/game/economy';
+import { walkMs } from '../../../shared/game/paths';
+import { STRUCTURE_IDS, VENUE_IDS } from '../../../shared/constants/config';
 import { q2 } from '../../../shared/protocol/codec';
 import { C2S, EMOTES, EMOTE_COOLDOWN_MS, S2C, type InteractTarget, type MoveTuple } from '../../../shared/protocol/messages';
 import { ANIM, type ActiveEvent, type MatchResult, type BusinessState, type PlayerPublic, type RoomSnapshot } from '../../../shared/types/state';
@@ -54,10 +56,14 @@ export class Game {
   myId: string | null = null;
   inMatch = false;
 
+  /** Menu backdrop: two finished businesses, purely client-side (never touch the server). */
+  private showcase: { view: BusinessView; acc: number; pay: [number, number][] }[] = [];
+  private showcaseId = 1;
   private players = new Map<string, RemotePlayer>();
   private me: Character | null = null;
   private myPos = new THREE.Vector3();
   private myVelY = 0;
+  private myVel = new THREE.Vector3();
   private myRot = 0;
   private myAnim: number = ANIM.idle;
   private interactUntil = 0;
@@ -117,6 +123,7 @@ export class Game {
     this.resize();
     window.addEventListener('resize', () => this.resize());
     this.bindNet();
+    this.startShowcase();
     this.renderer.setAnimationLoop(() => this.frame());
   }
 
@@ -209,8 +216,10 @@ export class Game {
       this.clearMatchVisuals();
       this.inMatch = false;
       this.input.enabled = false;
+      this.startShowcase();
       return;
     }
+    this.stopShowcase();
     for (const p of room.players) {
       if (p.id === myId) {
         if (!this.me) {
@@ -257,10 +266,11 @@ export class Game {
       const w = plotToWorld(spawnPlot, sp.lx, sp.lz);
       this.myPos.set(w.x, 0, w.z);
       this.myVelY = 0;
+      this.myVel.set(0, 0, 0);
       this.myRot = PLOTS[spawnPlot].dir > 0 ? -Math.PI / 2 : Math.PI / 2;
       // Camera on the plaza side, looking at your own business.
       this.rig.yaw = PLOTS[spawnPlot].dir > 0 ? Math.PI / 2 : -Math.PI / 2;
-      this.rig.pitch = 0.5;
+      this.rig.pitch = 0.38;
       this.rig.setOverride(null);
       this.rig.snap(this.myPos);
       this.ended = null;
@@ -342,6 +352,55 @@ export class Game {
       };
       grow();
       this.audio.play('construction');
+    }
+  }
+
+  startShowcase() {
+    if (this.showcase.length || this.inMatch) return;
+    const setups = [
+      { plot: 0, accent: 0x3b82f6, label: 'YOUR EMPIRE', tier: 9, venues: [3, 3, 2, 2, 1, 0], structs: 5, workers: [2, 2, 1, 1, 1] },
+      { plot: 1, accent: 0xf97316, label: 'RIVAL', tier: 7, venues: [3, 2, 2, 1, 0, 0], structs: 4, workers: [2, 1, 1, 1, 1] },
+    ];
+    for (const st of setups) {
+      const b = emptyBusiness(-1 - st.plot, st.plot, [], 0);
+      b.tier = st.tier;
+      VENUE_IDS.forEach((id, i) => { b.venues[id] = st.venues[i]; });
+      b.structures = STRUCTURE_IDS.slice(0, st.structs);
+      (['cashier', 'worker', 'marketer', 'delivery', 'manager'] as const).forEach((k, i) => { b.workers[k] = st.workers[i]; });
+      const view = new BusinessView(st.plot, st.accent, this.effects, this.world.crowd, Math.min(24, this.quality.maxNpcs), false);
+      view.apply(b, false);
+      view.setOwnerLabel(st.label, hex(st.accent));
+      this.scene.add(view.root);
+      this.showcase.push({ view, acc: Math.random(), pay: [] });
+    }
+  }
+
+  private stopShowcase() {
+    for (const s of this.showcase) { s.view.dispose(); this.scene.remove(s.view.root); }
+    this.showcase = [];
+  }
+
+  private updateShowcase(dt: number) {
+    const now = Date.now();
+    for (const s of this.showcase) {
+      const st = s.view.state!;
+      s.acc -= dt;
+      if (s.acc <= 0 && s.view.customers.visibleCount < 22) {
+        s.acc = 0.45 + Math.random() * 0.5;
+        const built = VENUE_IDS.map((id, i) => (st.venues[id] ? i : -9)).filter((i) => i >= 0);
+        const dest = Math.random() < 0.4 ? -1 : built[Math.floor(Math.random() * built.length)];
+        const side = Math.random() < 0.5 ? 0 : 1;
+        const id = this.showcaseId++;
+        const arrive = now + walkMs(dest, side);
+        s.view.customers.spawn(id, dest, 0, arrive, side);
+        s.pay.push([id, arrive + (dest < 0 ? 1200 + Math.random() * 1500 : 300)]);
+      }
+      for (let i = s.pay.length - 1; i >= 0; i--) {
+        if (now < s.pay[i][1]) continue;
+        s.view.customers.paid(s.pay[i][0]);
+        s.pay.splice(i, 1);
+      }
+      s.view.update(dt, now, this.elapsed, false);
     }
   }
 
@@ -484,16 +543,21 @@ export class Game {
       this.updateLocal(dt);
       this.updateRemotes(dt, serverNow);
       this.updateCamera(dt);
-      for (const v of this.views.values()) v.update(dt, serverNow, this.elapsed, this.myPos.distanceTo(v.root.position) < 70);
+      for (const v of this.views.values()) {
+        if (v.isMine) v.focusPads(this.myPos.x, this.myPos.z);
+        v.update(dt, serverNow, this.elapsed, this.myPos.distanceTo(v.root.position) < 70);
+      }
       if (this.room.event?.kind === 'power') this.applyEventVisuals(this.room.event);
       this.sendAcc += dt;
       if (this.sendAcc >= 1 / CLIENT.sendHz) { this.sendAcc = 0; this.sendMove(); }
       if (Math.floor(this.elapsed * 4) !== Math.floor((this.elapsed - dt) * 4)) this.updateTags();
     } else {
-      // Menu: slow cinematic orbit over the city.
-      const t = this.elapsed * 0.05;
-      this.camera.position.set(Math.cos(t) * 58, 46, Math.sin(t) * 58);
-      this.camera.lookAt(0, 2, 0);
+      this.updateShowcase(dt);
+      // Menu: slow cinematic drift between the two showcase businesses.
+      const t = this.elapsed * 0.045;
+      const fx = Math.sin(t * 0.7) * 34;
+      this.camera.position.set(fx + Math.cos(t) * 40, 26 + Math.sin(t * 1.3) * 4, Math.sin(t) * 40);
+      this.camera.lookAt(fx * 0.9, 7, 0);
     }
     this.effects.update(dt);
     this.updateTutorialArrow();
@@ -511,10 +575,17 @@ export class Game {
     const rx = Math.cos(yaw), rz = -Math.sin(yaw);
     const mx = fx * y + rx * x, mz = fz * y + rz * x;
     const mag = Math.min(1, Math.hypot(mx, mz));
-    const speed = PLAYER.runSpeed * mag;
+    const want = PLAYER.runSpeed * mag;
+    // Short acceleration / braking (≈0.1 s) — no instant start/stop, no foot sliding.
+    const wx = mag > 0.05 ? (mx / Math.hypot(mx, mz)) * want : 0, wz = mag > 0.05 ? (mz / Math.hypot(mx, mz)) * want : 0;
+    const ka = Math.min(1, dt * (mag > 0.05 ? 14 : 18));
+    this.myVel.x += (wx - this.myVel.x) * ka;
+    this.myVel.z += (wz - this.myVel.z) * ka;
+    if (Math.hypot(this.myVel.x, this.myVel.z) < 0.05) this.myVel.set(0, 0, 0);
+    this.myPos.x += this.myVel.x * dt;
+    this.myPos.z += this.myVel.z * dt;
+    const speed = Math.hypot(this.myVel.x, this.myVel.z);
     if (mag > 0.05) {
-      this.myPos.x += (mx / Math.hypot(mx, mz)) * speed * dt;
-      this.myPos.z += (mz / Math.hypot(mx, mz)) * speed * dt;
       const target = Math.atan2(mx, mz);
       let d = target - this.myRot;
       while (d > Math.PI) d -= Math.PI * 2;
@@ -556,7 +627,7 @@ export class Game {
     else if (!this.grounded) this.myAnim = ANIM.jump;
     else if (performance.now() < this.carryUntil) this.myAnim = ANIM.carry;
     else if (performance.now() < this.interactUntil) this.myAnim = ANIM.interact;
-    else this.myAnim = mag > 0.05 ? (mag < 0.55 ? ANIM.walk : ANIM.run) : ANIM.idle;
+    else this.myAnim = speed > 0.3 ? (speed < PLAYER.runSpeed * 0.55 ? ANIM.walk : ANIM.run) : ANIM.idle;
     this.mySpeed = speed;
 
     const me = this.me!;
@@ -663,7 +734,7 @@ export class Game {
       const ch = p.id === this.myId ? this.me : this.players.get(p.id)?.char;
       if (!ch) continue;
       const l = label(p);
-      ch.setTag(l.name, l.money, hex(p.color));
+      ch.setTag(l.name, p.id === this.myId ? '' : l.money, hex(p.color)); // own money is already in the HUD
     }
   }
 

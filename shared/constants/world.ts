@@ -45,7 +45,7 @@ export const PLOT_LOCAL = {
   counter: { lx: -5, lz: 0 },
   machine: { lx: -5, lz: -8.5 },
   entrance: { lx: 26, lz: 0 },
-  spawn: [{ lx: 14, lz: 3 }, { lx: 14, lz: -3 }, { lx: 16, lz: 6 }, { lx: 16, lz: -6 }],
+  spawn: [{ lx: 9, lz: 2.5 }, { lx: 9, lz: -2.5 }, { lx: 9.5, lz: 7.5 }, { lx: 9.5, lz: -7.5 }],
   /** Customers appear on the avenue sidewalk at the plot front and walk in. */
   customerSpawn: [{ lx: 27.4, lz: 22 }, { lx: 27.4, lz: -22 }],
   /** Secondary businesses (data-driven list in config VENUES), door faces the central aisle. */

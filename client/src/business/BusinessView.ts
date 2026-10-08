@@ -35,7 +35,7 @@ export interface PadDef {
   open?: 'upgrades';
 }
 
-interface PadVisual { group: THREE.Group; disc: THREE.Mesh; ring: THREE.Mesh; label: LabelSprite; def: PadDef; pending: number }
+interface PadVisual { group: THREE.Group; disc: THREE.Mesh; ring: THREE.Mesh; label: LabelSprite; def: PadDef; pending: number; focus: number; want: number }
 interface BuildAnim { target: THREE.Object3D; extra: THREE.Object3D[]; t: number; dur: number; label: string; dust: number; sink?: boolean; size: number }
 interface Staff { kind: WorkerId; idx: number; slot: number; x: number; z: number; rot: number; props: THREE.Object3D | null }
 
@@ -51,6 +51,7 @@ const auraMats = {
 } as Record<number, THREE.MeshBasicMaterial>;
 
 const STAFF_SHIRTS: Record<WorkerId, number> = { cashier: 0x0ea5e9, worker: 0xf59e0b, manager: 0x1f2937, delivery: 0xdc2626, marketer: 0xec4899 };
+const PAD_LABEL_SCALE = 3.1;
 const STAFF_OFFSETS = [[0, 0], [0, 1.4], [0, -1.4]];
 
 export class BusinessView {
@@ -77,6 +78,8 @@ export class BusinessView {
   private specials: SpecialMarker[] = [];
   private payAgg = new Map<string, { pos: THREE.Vector3; amt: number; t: number }>();
   private lastSaleAt = 0;
+  private lastReaction = -99;
+  private reactions: { at: THREE.Vector3; delay: number }[] = [];
   private time = 0;
   state: BusinessState | null = null;
   onBuilt: (label: string, at: THREE.Vector3, big: boolean) => void = () => {};
@@ -261,7 +264,7 @@ export class BusinessView {
       for (let i = have.length; i < want; i++) {
         const base = PLOT_LOCAL.staff[kind];
         const off = STAFF_OFFSETS[i];
-        const slot = this.crowd.alloc({ shirt: STAFF_SHIRTS[kind], pants: 0x1f2937, skin: [0xf6d0b1, 0xc98e66, 0xe8b48f][i], hair: [0x2b1b12, 0xd9a441, 0x111827][i] });
+        const slot = this.crowd.alloc({ shirt: STAFF_SHIRTS[kind], pants: 0x1f2937, skin: [0xf6d0b1, 0xc98e66, 0xe8b48f][i], hair: [0x2b1b12, 0xd9a441, 0x111827][i], hairStyle: i % 3, fixed: true });
         const st: Staff = { kind, idx: i, slot, x: base.lx + off[0], z: base.lz + off[1], rot: kind === 'cashier' ? Math.PI / 2 : -Math.PI / 2, props: this.staffProps(kind, base.lx + off[0], base.lz + off[1]) };
         this.staff.push(st);
         if (animate) this.effects.burst(this.toWorld(new THREE.Vector3(st.x, 1.2, st.z)), 'sparkle', 18);
@@ -335,7 +338,7 @@ export class BusinessView {
     const st = (ok: boolean, code?: string): PadDef['state'] => (ok ? 'ok' : code === 'LOCKED' ? 'locked' : 'poor');
     if (s.tier < TIERS.length) {
       const c = checkTier(s);
-      const pos = s.tier === 0 ? { lx: PLOT_LOCAL.counter.lx - 1, lz: 0 } : PLOT_LOCAL.pads.hq;
+      const pos = s.tier === 0 ? { lx: 3, lz: 0 } : PLOT_LOCAL.pads.hq; // first pad a few steps from spawn
       pads.push({
         key: 'hq', ...pos, icon: TIERS[s.tier].icon, title: s.tier === 0 ? 'COFFEE STAND' : `HQ → ${TIERS[s.tier].name}`,
         price: tierCost(s.tier + 1), state: st(c.ok, c.ok ? undefined : c.code), send: { t: 'BUILD_BUSINESS', kind: 'tier' },
@@ -392,11 +395,11 @@ export class BusinessView {
         disc.rotation.x = -Math.PI / 2; disc.position.y = 0.08;
         const ring = new THREE.Mesh(ringGeo, ringMats[d.state]);
         ring.rotation.x = -Math.PI / 2; ring.position.y = 0.09;
-        const label = new LabelSprite(420, 150, 3.6);
+        const label = new LabelSprite(420, 150, PAD_LABEL_SCALE);
         label.sprite.position.y = 2.4;
         group.add(disc, ring, label.sprite);
         this.root.add(group);
-        p = { group, disc, ring, label, def: d, pending: 0 };
+        p = { group, disc, ring, label, def: d, pending: 0, focus: 1, want: 1 };
         this.pads.set(d.key, p);
       }
       p.def = d;
@@ -423,6 +426,22 @@ export class BusinessView {
     return out;
   }
 
+  /**
+   * Declutter: only the pads closest to the player show a full-size label;
+   * the rest shrink to small hints and far ones disappear.
+   */
+  focusPads(px: number, pz: number) {
+    const v = new THREE.Vector3();
+    const list: { p: PadVisual; d: number }[] = [];
+    for (const p of this.pads.values()) {
+      v.set(p.def.lx, 0, p.def.lz);
+      this.root.localToWorld(v);
+      list.push({ p, d: Math.hypot(v.x - px, v.z - pz) });
+    }
+    list.sort((a, b) => a.d - b.d);
+    list.forEach(({ p, d }, i) => { p.want = d > 30 ? 0 : i < 3 && d < 18 ? 1 : 0.5; });
+  }
+
   markPending(key: string) {
     const p = this.pads.get(key);
     if (p) p.pending = 0.6;
@@ -441,6 +460,11 @@ export class BusinessView {
         const agg = this.payAgg.get(key) ?? { pos: local.clone().setY(2.4), amt: 0, t: 0 };
         agg.amt += amt;
         this.payAgg.set(key, agg);
+        // Rare happy reaction (max one every 2.5 s per business) — feedback without spam.
+        if (this.time - this.lastReaction > 2.5 && Math.random() < 0.12) {
+          this.lastReaction = this.time;
+          this.reactions.push({ at: this.toWorld(local.clone().setY(2.6)), delay: 0.25 });
+        }
         this.onPay(amt);
       }
     }
@@ -476,7 +500,7 @@ export class BusinessView {
         for (const x of a.extra) x.parent?.remove(x);
         this.anims.splice(i, 1);
         const at = a.target.getWorldPosition(new THREE.Vector3()).setY(4.5);
-        if (nearCamera) this.effects.burst(at, 'sparkle', 40);
+        if (nearCamera) { this.effects.burst(at, 'sparkle', 40); this.effects.burst(at.clone().setY(0.5), 'dust', 14); this.effects.flash(at.clone().setY(a.size * 0.35), a.size * 0.8); }
         this.onBuilt(a.label, at, a.size >= 8);
       }
     }
@@ -486,7 +510,12 @@ export class BusinessView {
     for (const p of this.pads.values()) {
       const s = 1 + Math.sin(time * 4) * 0.08 + p.pending * 0.6;
       p.ring.scale.set(s, s, s);
-      p.label.sprite.position.y = 2.4 + Math.sin(time * 2 + p.group.position.x) * 0.08;
+      p.focus += (p.want - p.focus) * Math.min(1, dt * 6);
+      const ls = PAD_LABEL_SCALE * (0.35 + 0.65 * p.focus);
+      p.label.sprite.scale.set(ls, (ls * 150) / 420, 1);
+      p.label.sprite.material.opacity = Math.min(1, p.focus * 1.6);
+      p.label.sprite.visible = p.focus > 0.04;
+      p.label.sprite.position.y = 1.2 + ls * 0.36 + Math.sin(time * 2 + p.group.position.x) * 0.08;
       if (p.pending > 0) p.pending = Math.max(0, p.pending - dt);
     }
     this.customers.update(dt, serverNow);
@@ -503,10 +532,17 @@ export class BusinessView {
       a.scale.setScalar(1 + Math.sin(time * 6) * 0.15);
       if (nearCamera && Math.random() < dt * 6) this.effects.burst(this.toWorld(new THREE.Vector3(sp.x, 1.6, sp.z)), 'sparkle', 2);
     });
-    // Aggregated money floats (one label per spot every ~0.45 s — no DOM spam)
+    for (let i = this.reactions.length - 1; i >= 0; i--) {
+      const r = this.reactions[i];
+      r.delay -= dt;
+      if (r.delay > 0) continue;
+      this.reactions.splice(i, 1);
+      if (nearCamera) this.effects.floatText(r.at, ['❤️', '⭐', '😍', '👍'][Math.floor(Math.random() * 4)], 'emoji');
+    }
+    // Aggregated money floats (one label per spot every ~0.8 s — no DOM spam)
     for (const [k, agg] of this.payAgg) {
       agg.t += dt;
-      if (agg.t < 0.45) continue;
+      if (agg.t < 0.8) continue;
       this.payAgg.delete(k);
       if (!nearCamera) continue;
       const at = this.toWorld(agg.pos);

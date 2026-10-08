@@ -34,6 +34,8 @@ function run(minutes: number, manualPerSec: number, label: string, coop = false)
   const milestones: string[] = [];
   const mark = (what: string) => milestones.push(`${(t / 60000).toFixed(1).padStart(4)}m  ${what}`);
   const seen = new Set<string>();
+  let lastBuy = 0, maxGap = 0, gapAt = 0, buys = 0;
+  const buysPerMin: number[] = [];
   while (t < minutes * 60_000) {
     t += step;
     sim.step(step, t, NO_MODS, noop);
@@ -66,6 +68,12 @@ function run(minutes: number, manualPerSec: number, label: string, coop = false)
     if (best) {
       sim.spend(best.cost, best.cat);
       best.apply(b);
+      if (t <= 10 * 60_000) {
+        if (t - lastBuy > maxGap) { maxGap = t - lastBuy; gapAt = lastBuy; }
+        lastBuy = t; buys++;
+        const m = Math.floor(t / 60000); buysPerMin[m] = (buysPerMin[m] ?? 0) + 1;
+      }
+      if (best.cat === 'spentUpgrade' && !seen.has('first-upgrade')) { seen.add('first-upgrade'); mark(`first upgrade: ${best.name} ($${formatMoney(best.cost)})`); }
       const key = best.name.replace(/\+$/, '');
       if (!seen.has(key) && (key.startsWith('HQ') || VENUE_IDS.includes(key as never) || WORKER_IDS.includes(key as never))) {
         seen.add(key);
@@ -76,6 +84,7 @@ function run(minutes: number, manualPerSec: number, label: string, coop = false)
   sim.refreshValue();
   console.log(`\n=== ${label}`);
   console.log(milestones.join('\n'));
+  console.log(`  purchases (first 10 min): ${buys} · per minute [${Array.from({ length: 10 }, (_, i) => buysPerMin[i] ?? 0).join(' ')}] · longest wait ${(maxGap / 1000).toFixed(0)}s at ${(gapAt / 60000).toFixed(1)}m`);
   console.log(`  FINAL value $${formatMoney(b.value)} · HQ ${b.tier} · venues ${Object.values(b.venues).filter(Boolean).length} · $${formatMoney(incomePerMinute(b))}/min${coop ? ` · Mega Mall ($${formatMoney(COOP_GOAL.cost)}) ${megaAt >= 0 ? `at ${(megaAt / 60000).toFixed(1)} min` : 'NOT reached'}` : ''}`);
   return b.value;
 }

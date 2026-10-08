@@ -89,6 +89,7 @@ export class CustomerManager {
   private startLeaving(n: Npc) {
     this.order = this.order.filter((x) => x !== n.id);
     n.state = 'leave';
+    n.t = 0;
     const sg = n.z >= 0 ? 1 : -1;
     const s = PLOT_LOCAL.customerSpawn[sg > 0 ? 0 : 1];
     n.exit = [{ lx: n.x, lz: sg * 3.6 }, { lx: 23, lz: sg * 3.6 }, { lx: s.lx, lz: sg * 3.6 }, { lx: s.lx, lz: s.lz }];
@@ -112,7 +113,8 @@ export class CustomerManager {
         const tx = QUEUE_START + (qi % 12) * 1.05;
         const row = Math.floor(qi / 12);
         const tz = row === 0 ? 0 : (row % 2 ? -1 : 1) * Math.ceil(row / 2) * 1.3;
-        this.moveTo(n, tx, tz, 3.2, dt, Math.PI * -0.5);
+        n.t += dt;
+        if (this.moveTo(n, tx, tz, 3.2, dt, Math.PI * -0.5)) this.drawIdle(n, qi === 0);
       }
       qi++;
     }
@@ -142,7 +144,8 @@ export class CustomerManager {
         if (n.t > 0.45) this.remove(n);
       } else if (n.state === 'leave') {
         const target = n.exit[n.exitI];
-        const arrived = this.moveTo(n, target.lx, target.lz, 3.4, dt);
+        n.t += dt;
+        const arrived = this.moveTo(n, target.lx, target.lz, 3.4, dt, undefined, true);
         if (arrived) {
           n.exitI++;
           if (n.exitI >= n.exit.length) this.remove(n);
@@ -151,7 +154,21 @@ export class CustomerManager {
     }
   }
 
-  private moveTo(n: Npc, tx: number, tz: number, speed: number, dt: number, idleRot?: number): boolean {
+  /** Waiting: weight shift + glance around; the customer at the counter gestures while paying. */
+  private drawIdle(n: Npc, atCounter: boolean) {
+    if (n.slot < 0) return;
+    const t = n.t + n.phase;
+    this.v.set(n.x, 0, n.z);
+    this.root.localToWorld(this.v);
+    const look = Math.sin(t * 0.6) * 0.35 * (Math.sin(t * 0.23) > 0.3 ? 1 : 0.2);
+    const rot = n.rot + look + this.root.rotation.y;
+    const s = n.kind === CUSTOMER_KIND.normal ? 1 : 1.12;
+    const armR = atCounter ? -1.25 + Math.sin(t * 5) * 0.25 : -0.12 + Math.sin(t * 1.3) * 0.06;
+    const armL = atCounter ? -0.3 : Math.sin(t * 0.9) > 0.85 ? -1.1 : -0.1; // occasional phone check
+    this.crowd.pose(n.slot, this.v.x, 0, this.v.z, rot, 0, 0, s, 0, Math.abs(Math.sin(t * 1.1)) * 0.015, armL, armR);
+  }
+
+  private moveTo(n: Npc, tx: number, tz: number, speed: number, dt: number, idleRot?: number, happy = false): boolean {
     const dx = tx - n.x, dz = tz - n.z;
     const d = Math.hypot(dx, dz);
     if (d < 0.08) {
@@ -164,17 +181,17 @@ export class CustomerManager {
     n.z += (dz / d) * step;
     n.rot = Math.atan2(dx, dz);
     n.phase += dt * speed * 2.6;
-    this.draw(n, 0.6);
+    this.draw(n, 0.6, 1, happy ? Math.abs(Math.sin(n.phase)) * 0.07 : 0);
     return false;
   }
 
-  private draw(n: Npc, swing: number, scale = 1) {
+  private draw(n: Npc, swing: number, scale = 1, bob = 0) {
     if (n.slot < 0) return;
     this.v.set(n.x, 0, n.z);
     this.root.localToWorld(this.v);
     const rot = n.rot + this.root.rotation.y;
     const s = n.kind === CUSTOMER_KIND.normal ? scale : scale * 1.12;
-    this.crowd.pose(n.slot, this.v.x, 0, this.v.z, rot, n.phase, swing, s, 0, n.kind === CUSTOMER_KIND.golden ? Math.abs(Math.sin(n.phase)) * 0.04 : 0);
+    this.crowd.pose(n.slot, this.v.x, 0, this.v.z, rot, n.phase, swing, s, 0, n.kind === CUSTOMER_KIND.golden ? Math.abs(Math.sin(n.phase)) * 0.04 : bob);
   }
 
   private remove(n: Npc) {

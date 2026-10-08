@@ -3,7 +3,7 @@ import * as THREE from 'three';
 // All NPC humans (customers + pedestrians) rendered with 7 InstancedMeshes:
 // adding people costs no extra draw calls. Each person = set of part matrices.
 
-export interface Look { shirt: number; pants: number; skin: number; hair: number }
+export interface Look { shirt: number; pants: number; skin: number; hair: number; hairStyle?: number; fixed?: boolean }
 
 const SKINS = [0xf6d0b1, 0xe8b48f, 0xc98e66, 0x9a6845, 0xf1c27d];
 const HAIRS = [0x2b1b12, 0x5a3a22, 0xd9a441, 0x1f1f1f, 0xa0522d, 0xe5e5e5];
@@ -32,6 +32,13 @@ export class Crowd {
   private dirty = false;
   private tmpColor = new THREE.Color();
   readonly capacity: number;
+  /** Per-person body variation (height, width, hairstyle, stride) — same draw calls, less "clone army". */
+  private shape: { h: number; w: number; hair: number; stride: number }[] = [];
+  /** 0 short · 1 long (covers the back of the head) · 2 bun · 3 bald/cap-less */
+  private static HAIR_LOCAL: [number, number, number, number, number][] = [
+    // sx, sy, sz, y, z
+    [1, 1, 1, 1.8, -0.02], [1.06, 1.45, 1.1, 1.72, -0.06], [0.62, 0.7, 0.62, 2.0, -0.08], [0.001, 0.001, 0.001, 1.8, 0],
+  ];
 
   constructor(scene: THREE.Scene, capacity: number, shadows: boolean) {
     this.capacity = capacity;
@@ -56,6 +63,7 @@ export class Crowd {
       this.meshes[p] = im;
     }
     for (let i = capacity - 1; i >= 0; i--) this.free.push(i);
+    for (let i = 0; i < capacity; i++) this.shape.push({ h: 1, w: 1, hair: 0, stride: 1 });
   }
 
   get available() { return this.free.length; }
@@ -67,6 +75,9 @@ export class Crowd {
     set('torso', look.shirt); set('armL', look.shirt); set('armR', look.shirt);
     set('legL', look.pants); set('legR', look.pants);
     set('head', look.skin); set('hair', look.hair);
+    const r = Math.random;
+    const hair = look.hairStyle ?? (r() < 0.5 ? 0 : r() < 0.55 ? 1 : r() < 0.6 ? 2 : 3);
+    this.shape[i] = { h: look.fixed ? 1 : 0.9 + r() * 0.18, w: look.fixed ? 1 : 0.9 + r() * 0.22, hair, stride: 0.85 + r() * 0.3 };
     for (const p of PARTS) if (this.meshes[p].instanceColor) this.meshes[p].instanceColor!.needsUpdate = true;
     return i;
   }
@@ -85,17 +96,19 @@ export class Crowd {
   pose(i: number, x: number, y: number, z: number, rotY: number, phase: number, swing: number, scale = 1, armsUp = 0, bob = 0, armL?: number, armR?: number) {
     if (i < 0) return;
     this.q.setFromEuler(this.e.set(0, rotY, 0));
-    this.base.compose(this.v.set(x, y + bob, z), this.q, this.s.set(scale, scale, scale));
-    const leg = Math.sin(phase) * swing;
-    const set = (p: Part, lx: number, ly: number, lz: number, rx = 0, rz = 0) => {
+    const sh = this.shape[i];
+    this.base.compose(this.v.set(x, y + bob, z), this.q, this.s.set(scale * sh.w, scale * sh.h, scale * sh.w));
+    const leg = Math.sin(phase * sh.stride) * swing;
+    const set = (p: Part, lx: number, ly: number, lz: number, rx = 0, rz = 0, sx = 1, sy = 1, sz = 1) => {
       this.q.setFromEuler(this.e.set(rx, 0, rz));
-      this.local.compose(this.v.set(lx, ly, lz), this.q, this.s.set(1, 1, 1));
+      this.local.compose(this.v.set(lx, ly, lz), this.q, this.s.set(sx, sy, sz));
       this.m.multiplyMatrices(this.base, this.local);
       this.meshes[p].setMatrixAt(i, this.m);
     };
     set('torso', 0, 1.14, 0, swing * 0.08);
     set('head', 0, 1.74, 0);
-    set('hair', 0, 1.8, -0.02);
+    const hl = Crowd.HAIR_LOCAL[sh.hair];
+    set('hair', 0, hl[3], hl[4], 0, 0, hl[0], hl[1], hl[2]);
     set('legL', -0.12, 0.8, 0, leg);
     set('legR', 0.12, 0.8, 0, -leg);
     set('armL', -0.33, 1.44, 0, armL ?? (armsUp ? -2.6 * armsUp : -leg * 0.9), 0.08);

@@ -45,6 +45,9 @@ class App {
   endedShown = '';
   joining = false;
   private wasDisconnected = false;
+  private lobbyHtml = '';
+  private readyPending: { want: boolean; at: number } | null = null;
+  private lobbySeen = new Map<string, number>(); // player id → first seen (entrance animation)
 
   constructor() {
     if (isTouch) document.body.classList.add('touch');
@@ -215,7 +218,11 @@ class App {
         break;
       case 'ready': {
         const me = r?.players.find((p) => p.id === this.net.playerId);
+        // Waiting for the server: show a spinner and don't toggle back on a slow connection.
+        if (this.readyPending && performance.now() - this.readyPending.at < 5000) break;
+        this.readyPending = { want: !me?.ready, at: performance.now() };
         this.net.send({ t: C2S.PLAYER_READY, ready: !me?.ready });
+        this.renderLobby();
         break;
       }
       case 'start': this.net.send({ t: C2S.START_MATCH }); break;
@@ -432,26 +439,38 @@ class App {
     $('room-code').textContent = r.code;
     $('lobby-hint').textContent = r.isPrivate ? 'ROOM CODE · отправь другу' : 'QUICK MATCH · соперник найден!';
     const max = MATCH.maxPlayers[r.mode];
-    $('lobby-waiting').classList.toggle('hidden', r.players.length >= max);
     const cards: string[] = [];
     for (let i = 0; i < max; i++) {
+      if (i > 0 && max === 2) cards.push('<div class="vs-badge">VS</div>');
       const p = r.players.find((x) => x.slot === i);
-      if (!p) { cards.push(`<div class="pcard empty">⏳ PLAYER ${i + 1}<br/>WAITING…</div>`); continue; }
-      const ping = p.ping ? `${p.ping < 80 ? '🟢' : p.ping < 180 ? '🟡' : '🔴'} ${p.ping} ms` : '—';
-      cards.push(`<div class="pcard ${p.id === myId ? 'me' : ''} ${p.ready ? 'ready-on' : ''}">
-        <div class="slot">PLAYER ${i + 1}${p.isHost ? ' · 👑' : ''}${p.id === myId ? ' · ВЫ' : ''}</div>
-        <div class="pname"><span class="dot" style="background:#${p.color.toString(16).padStart(6, '0')}"></span>${HAT_ICONS[p.hat] ?? ''} ${esc(p.name)}</div>
-        <div class="ready ${p.ready ? 'ok' : ''}">${!p.connected ? '📡 переподключается…' : p.ready ? 'READY ✓' : 'не готов'}</div>
-        <div class="muted small" style="text-align:left">PING ${ping}</div></div>`);
+      if (!p) { cards.push(`<div class="pcard empty"><div class="avatar ghost">?</div><div class="slot">PLAYER ${i + 1}</div><div class="status wait">WAITING<span class="dots3"><i>.</i><i>.</i><i>.</i></span></div></div>`); continue; }
+      const isMe = p.id === myId;
+      // A newly arrived player gets a one-time entrance animation (sound + toast come from the room update).
+      if (!this.lobbySeen.has(p.id)) this.lobbySeen.set(p.id, performance.now());
+      const isNew = performance.now() - this.lobbySeen.get(p.id)! < 1500 && this.lobbySeen.size > 1;
+      const ping = p.ping ? `${p.ping < 80 ? '🟢' : p.ping < 180 ? '🟡' : '🔴'} ${p.ping} ms` : '';
+      const status = !p.connected ? '<div class="status warn">📡 RECONNECTING…</div>'
+        : p.ready ? '<div class="status ok">READY ✓</div>'
+        : isMe ? '<div class="status idle">НАЖМИ READY</div>' : '<div class="status on">CONNECTED ✓</div>';
+      const col = `#${p.color.toString(16).padStart(6, '0')}`;
+      cards.push(`<div class="pcard ${isMe ? 'me' : ''} ${p.ready ? 'ready-on' : ''} ${isNew && !isMe ? 'joined' : ''}">
+        <div class="avatar" style="--pc:${col}">${HAT_ICONS[p.hat] || esc(p.name.slice(0, 1).toUpperCase())}</div>
+        <div class="slot">PLAYER ${i + 1}${p.isHost ? ' · 👑' : ''}${isMe ? ' · ВЫ' : ''}</div>
+        <div class="pname">${esc(p.name)}</div>
+        ${status}
+        ${ping ? `<div class="ping">${ping}</div>` : ''}</div>`);
     }
-    $('lobby-players').innerHTML = cards.join('');
+    for (const id of [...this.lobbySeen.keys()]) if (!r.players.some((p) => p.id === id)) this.lobbySeen.delete(id);
+    const html = cards.join('');
+    if (html !== this.lobbyHtml) { this.lobbyHtml = html; $('lobby-players').innerHTML = html; } // re-render only on change (keeps CSS animations alive)
     for (const b of $('lobby-mode').querySelectorAll('button')) b.classList.toggle('on', (b as HTMLElement).dataset.mode === r.mode);
     $('lobby-mode').classList.toggle('locked', !this.isHost());
     $('mode-desc').textContent = MODE_DESC[r.mode] + (this.isHost() ? '' : ' (режим выбирает хост)');
     const me = r.players.find((p) => p.id === myId);
     const readyBtn = $('btn-ready');
     readyBtn.textContent = me?.ready ? 'READY ✓' : 'READY';
-    readyBtn.className = `btn ${me?.ready ? 'blue' : 'green'}`;
+    if (this.readyPending && (me?.ready === this.readyPending.want || performance.now() - this.readyPending.at > 5000)) this.readyPending = null;
+    readyBtn.className = `btn ${me?.ready ? 'blue' : 'green'}${this.readyPending ? ' loading' : ''}`;
     const all = r.players.length === max && r.players.every((p) => p.ready && p.connected);
     ($('btn-start') as HTMLButtonElement).disabled = !all;
     $('btn-start').textContent = all ? '▶ START' : r.players.length < max ? 'WAITING…' : 'ЖДЁМ READY';
@@ -484,6 +503,10 @@ class App {
     }
     $('res-badge').textContent = badge;
     $('res-title').textContent = title;
+    const card = document.querySelector('.results-card')!;
+    card.classList.toggle('win', won);
+    card.classList.toggle('draw', res.mode === 'vs' && res.winnerIds.length === 0);
+    card.classList.toggle('lose', !won && !(res.mode === 'vs' && res.winnerIds.length === 0));
     $('res-reason').textContent = reason;
     if (res.mode === 'vs' && opB) {
       const diff = Math.abs(myB.value - opB.value);
