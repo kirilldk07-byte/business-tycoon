@@ -3,7 +3,7 @@ import { EVENTS, PLAYER } from '../../../shared/constants/config';
 import { MEGA_MALL_PLOT, PLOT_LOCAL, PLOTS, POWER_SWITCHES, WORLD_BOUNDS, plotToWorld } from '../../../shared/constants/world';
 import { formatMoney } from '../../../shared/game/economy';
 import { q2 } from '../../../shared/protocol/codec';
-import { C2S, EMOTES, S2C, type InteractTarget, type MoveTuple } from '../../../shared/protocol/messages';
+import { C2S, EMOTES, EMOTE_COOLDOWN_MS, S2C, type InteractTarget, type MoveTuple } from '../../../shared/protocol/messages';
 import { ANIM, type ActiveEvent, type BusinessState, type PlayerPublic, type RoomSnapshot } from '../../../shared/types/state';
 import type { AudioManager } from '../audio/AudioManager';
 import { createConstructionSite, createCrate, createDeliveryTruck, createMegaMall, TIER_SIZE } from '../business/BuildingFactory';
@@ -13,7 +13,8 @@ import { resolveQuality, type Quality } from '../config/quality';
 import { Interpolator } from '../multiplayer/Interpolator';
 import type { Net } from '../multiplayer/Net';
 import { Character } from '../player/Character';
-import { World } from '../world/World';
+import { World, type AABB } from '../world/World';
+import { CameraRig } from './CameraRig';
 import { Effects } from './Effects';
 import { Input } from './Input';
 
@@ -28,6 +29,11 @@ interface RemotePlayer {
   char: Character;
   interp: Interpolator;
   lastPos: THREE.Vector3;
+  /** Smoothed render state on top of the interpolated sample (absorbs jitter). */
+  pos: THREE.Vector3;
+  rot: number;
+  speed: number;
+  fresh: boolean;
 }
 
 interface Box2 { minX: number; maxX: number; minZ: number; maxZ: number }
@@ -60,9 +66,12 @@ export class Game {
   private lastSentAt = 0;
   private moveSeq = 0;
 
-  private camYaw = Math.PI / 2;
-  private camPitch = 0.55;
-  private camDist = isTouch ? 17 : 15;
+  readonly rig: CameraRig;
+  private camColliders: AABB[] = [];
+  private camColliderTimer = 0;
+  private mySpeed = 0;
+  private snapJitter = 0;
+  private lastSnapAt = 0;
   private views = new Map<number, BusinessView>();
   private obstacles: Box2[] = [];
   private megaSite: THREE.Object3D | null = null;
@@ -94,6 +103,8 @@ export class Game {
     this.renderer.toneMappingExposure = 1.05;
     this.camera = new THREE.PerspectiveCamera(55, 1, 0.5, 700);
     this.world = new World(this.scene, q);
+    this.rig = new CameraRig(this.camera);
+    this.rig.wantDist = isTouch ? 18 : 16;
     this.effects = new Effects(this.scene, this.camera, floatLayer);
     this.input = new Input(canvas, joyBase, joyKnob);
     this.input.onKey = (code) => {
@@ -110,7 +121,7 @@ export class Game {
     const w = window.innerWidth, h = window.innerHeight;
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
-    this.camera.fov = w < h ? 70 : 55;
+    this.rig?.setAspect(w < h);
     this.camera.updateProjectionMatrix();
   }
 
@@ -119,6 +130,13 @@ export class Game {
   private bindNet() {
     const n = this.net;
     n.on(S2C.SNAPSHOT, (m) => {
+      // Track arrival jitter → adaptive interpolation delay.
+      const now = performance.now();
+      if (this.lastSnapAt) {
+        const dev = Math.abs(now - this.lastSnapAt - 1000 / 15);
+        this.snapJitter += (dev - this.snapJitter) * 0.1;
+      }
+      this.lastSnapAt = now;
       for (const [id, x, y, z, rot, anim] of m.p) {
         const rp = this.players.get(id);
         if (rp) rp.interp.push({ t: m.s, x, y, z, rot, anim });
@@ -205,16 +223,16 @@ export class Game {
     for (const p of room.players) {
       if (p.id === myId) {
         if (!this.me) {
-          this.me = new Character(p.color, p.hat, true);
+          this.me = new Character(p.color, p.hat, true, p.slot);
           this.scene.add(this.me.root);
         }
         continue;
       }
       let rp = this.players.get(p.id);
       if (!rp) {
-        const char = new Character(p.color, p.hat, false);
+        const char = new Character(p.color, p.hat, false, p.slot);
         this.scene.add(char.root);
-        rp = { info: p, char, interp: new Interpolator(), lastPos: new THREE.Vector3() };
+        rp = { info: p, char, interp: new Interpolator(), lastPos: new THREE.Vector3(), pos: new THREE.Vector3(), rot: 0, speed: 0, fresh: true };
         this.players.set(p.id, rp);
       }
       rp.info = p;
@@ -250,9 +268,12 @@ export class Game {
       this.myVelY = 0;
       this.myRot = PLOTS[spawnPlot].dir > 0 ? -Math.PI / 2 : Math.PI / 2;
       // Camera on the plaza side, looking at your own business.
-      this.camYaw = PLOTS[spawnPlot].dir > 0 ? Math.PI / 2 : -Math.PI / 2;
+      this.rig.yaw = PLOTS[spawnPlot].dir > 0 ? Math.PI / 2 : -Math.PI / 2;
+      this.rig.pitch = 0.5;
+      this.rig.setOverride(null);
+      this.rig.snap(this.myPos);
       this.ended = null;
-      for (const rp of this.players.values()) rp.interp = new Interpolator();
+      for (const rp of this.players.values()) { rp.interp = new Interpolator(); rp.fresh = true; }
     }
     this.inMatch = true;
     this.input.enabled = room.status === 'playing' || room.status === 'countdown' || room.status === 'ended';
@@ -290,6 +311,7 @@ export class Game {
       const center = v.toWorld(new THREE.Vector3(PLOT_LOCAL.building.lx, 3, 0));
       if (cause === 'tier' && b.tier > prevTier) {
         this.audio.play('construction');
+        if (mine) this.rig.shake(0.25);
         if (!mine) this.hud.toast(`🏗️ Соперник строит: уровень ${b.tier}`, 'info');
       } else if (cause.startsWith('upgrade')) {
         this.effects.burst(center, 'sparkle', 24);
@@ -412,9 +434,15 @@ export class Game {
 
   // -------------------------------------------------------------- actions
 
-  emote(i: number) {
-    if (!this.inMatch) return;
+  private lastEmoteAt = 0;
+  /** Returns false while on cooldown (server rate-limits too). */
+  emote(i: number): boolean {
+    if (!this.inMatch) return false;
+    const now = performance.now();
+    if (now - this.lastEmoteAt < EMOTE_COOLDOWN_MS) return false;
+    this.lastEmoteAt = now;
     this.net.send({ t: C2S.EMOTE, e: i });
+    return true;
   }
 
   private findTarget(): { target: InteractTarget; label: string } | null {
@@ -463,7 +491,7 @@ export class Game {
     } else {
       // Menu: slow cinematic orbit over the city.
       const t = this.elapsed * 0.05;
-      this.camera.position.set(Math.cos(t) * 70, 38, Math.sin(t) * 70);
+      this.camera.position.set(Math.cos(t) * 58, 46, Math.sin(t) * 58);
       this.camera.lookAt(0, 2, 0);
     }
     this.effects.update(dt);
@@ -475,8 +503,9 @@ export class Game {
     const room = this.room!;
     const canMove = room.status === 'playing' || room.status === 'ended';
     const { x, y } = canMove ? this.input.axes() : { x: 0, y: 0 };
-    const fx = -Math.sin(this.camYaw), fz = -Math.cos(this.camYaw);
-    const rx = Math.cos(this.camYaw), rz = -Math.sin(this.camYaw);
+    const yaw = this.rig.yaw;
+    const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
+    const rx = Math.cos(yaw), rz = -Math.sin(yaw);
     const mx = fx * y + rx * x, mz = fz * y + rz * x;
     const mag = Math.min(1, Math.hypot(mx, mz));
     const speed = PLAYER.runSpeed * mag;
@@ -514,7 +543,8 @@ export class Game {
     else if (this.ended === 'lose') this.myAnim = ANIM.lose;
     else if (!this.grounded) this.myAnim = ANIM.jump;
     else if (performance.now() < this.interactUntil) this.myAnim = ANIM.interact;
-    else this.myAnim = mag > 0.05 ? ANIM.run : ANIM.idle;
+    else this.myAnim = mag > 0.05 ? (mag < 0.55 ? ANIM.walk : ANIM.run) : ANIM.idle;
+    this.mySpeed = speed;
 
     const me = this.me!;
     me.anim = this.myAnim;
@@ -540,37 +570,61 @@ export class Game {
   }
 
   private updateRemotes(dt: number, serverNow: number) {
-    const renderTime = serverNow - Math.max(CLIENT.interpDelayMs, this.net.rtt * 0.25 + 70);
+    // Render the past: base delay grows with measured jitter (smooth on bad networks).
+    const delay = Math.min(260, Math.max(CLIENT.interpDelayMs, 80 + this.snapJitter * 2.5));
+    const renderTime = serverNow - delay;
+    const kPos = 1 - Math.exp(-dt * 18);
+    const kRot = 1 - Math.exp(-dt * 12);
     for (const rp of this.players.values()) {
       const s = rp.interp.sample(renderTime);
       if (!s) continue;
-      const pos = new THREE.Vector3(s.x, s.y, s.z);
-      const speed = dt > 0 ? pos.distanceTo(rp.lastPos) / dt : 0;
-      rp.lastPos.copy(pos);
-      rp.char.root.position.copy(pos);
-      rp.char.root.rotation.y = s.rot;
+      const target = new THREE.Vector3(s.x, s.y, s.z);
+      if (rp.fresh || rp.pos.distanceTo(target) > 6) {
+        rp.pos.copy(target); rp.rot = s.rot; rp.fresh = false; // respawn / big correction: snap
+      } else {
+        rp.pos.lerp(target, kPos);
+        let d = s.rot - rp.rot;
+        while (d > Math.PI) d -= Math.PI * 2;
+        while (d < -Math.PI) d += Math.PI * 2;
+        rp.rot += d * kRot;
+      }
+      const inst = dt > 0 ? Math.hypot(rp.pos.x - rp.lastPos.x, rp.pos.z - rp.lastPos.z) / dt : 0;
+      rp.speed += (Math.min(inst, 10) - rp.speed) * Math.min(1, dt * 8);
+      rp.lastPos.copy(rp.pos);
+      rp.char.root.position.copy(rp.pos);
+      rp.char.root.rotation.y = rp.rot;
       rp.char.anim = s.anim;
       rp.char.root.visible = true;
-      rp.char.update(dt, Math.min(speed, 10));
-      // Blink while the player is reconnecting (materials are shared, so no opacity tricks).
+      rp.char.update(dt, rp.speed);
+      // Blink while the player is reconnecting.
       if (!rp.info.connected) rp.char.root.visible = Math.floor(performance.now() / 400) % 2 === 0;
     }
   }
 
   private updateCamera(dt: number) {
     const c = this.input.consumeCamera();
-    this.camYaw -= c.dx * 0.005;
-    this.camPitch = Math.max(0.12, Math.min(1.25, this.camPitch + c.dy * 0.004));
-    this.camDist = Math.max(7, Math.min(32, this.camDist + c.zoom * 1.2));
-    const target = this.myPos.clone().add(new THREE.Vector3(0, 1.8, 0));
-    const want = new THREE.Vector3(
-      target.x + Math.sin(this.camYaw) * Math.cos(this.camPitch) * this.camDist,
-      target.y + Math.sin(this.camPitch) * this.camDist,
-      target.z + Math.cos(this.camYaw) * Math.cos(this.camPitch) * this.camDist,
-    );
-    this.camera.position.lerp(want, Math.min(1, dt * 10));
-    this.camera.lookAt(target);
+    this.rig.rotate(c.dx, c.dy, c.zoom);
+    this.camColliderTimer -= dt;
+    if (this.camColliderTimer <= 0) { this.camColliderTimer = 0.5; this.rebuildCamColliders(); }
+    this.rig.update(dt, this.myPos, this.mySpeed, this.camColliders);
   }
+
+  /** World city blocks + current business buildings (heights included). */
+  private rebuildCamColliders() {
+    const list: AABB[] = [...this.world.colliders];
+    const box = new THREE.Box3();
+    for (const v of this.views.values()) {
+      for (const o of v.cameraBlockers()) {
+        box.setFromObject(o);
+        if (box.isEmpty() || box.max.y < 2) continue;
+        list.push({ minX: box.min.x, maxX: box.max.x, minY: 0, maxY: box.max.y, minZ: box.min.z, maxZ: box.max.z });
+      }
+    }
+    this.camColliders = list;
+  }
+
+  /** Small camera kick (construction feedback). */
+  shake(amount: number) { this.rig.shake(amount); }
 
   private sendMove() {
     if (!this.room || this.room.status === 'lobby') return;

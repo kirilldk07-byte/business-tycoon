@@ -116,7 +116,7 @@ export const PLAYER = {
 export const RATE_LIMITS = {
   move: { perSec: 30, burst: 40 },
   action: { perSec: 12, burst: 20 },
-  emote: { perSec: 0.8, burst: 3 },
+  emote: { perSec: 0.6, burst: 2 },
   room: { perSec: 0.5, burst: 5 },
   dev: { perSec: 20, burst: 40 },
 };

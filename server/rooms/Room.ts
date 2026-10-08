@@ -11,6 +11,7 @@ import { q2 } from '../../shared/protocol/codec';
 import {
   ERR, S2C, type DevCmd, type ErrCode, type InteractTarget, type MoveTuple, type ServerMsg,
 } from '../../shared/protocol/messages';
+import { ANIM_MAX } from '../../shared/types/state';
 import type {
   ActiveEvent, ActiveEventKind, BusinessState, GameMode, MatchResult, MatchStatus, PlayerPublic, RoomSnapshot,
 } from '../../shared/types/state';
@@ -313,7 +314,7 @@ export class Room {
     x = Math.max(WORLD_BOUNDS.minX, Math.min(WORLD_BOUNDS.maxX, x));
     z = Math.max(WORLD_BOUNDS.minZ, Math.min(WORLD_BOUNDS.maxZ, z));
     y = Math.max(0, Math.min(4, y));
-    anim = Math.max(0, Math.min(5, Math.round(anim)));
+    anim = Math.max(0, Math.min(ANIM_MAX, Math.round(anim)));
     p.pos = [q2(x), q2(y), q2(z), q2(rot), anim];
     if (corrected) p.conn?.send({ t: S2C.CORRECTION, p: p.pos });
   }

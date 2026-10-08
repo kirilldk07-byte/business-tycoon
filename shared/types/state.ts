@@ -2,8 +2,9 @@ import type { CosmeticId, StructureId, UpgradeId, WorkerId } from '../constants/
 
 export type GameMode = 'vs' | 'coop' | 'solo';
 export type MatchStatus = 'lobby' | 'countdown' | 'playing' | 'ended';
-export type AnimState = 0 | 1 | 2 | 3 | 4 | 5; // idle, run, jump, interact, victory, lose
-export const ANIM = { idle: 0, run: 1, jump: 2, interact: 3, victory: 4, lose: 5 } as const;
+export const ANIM = { idle: 0, run: 1, jump: 2, interact: 3, victory: 4, lose: 5, walk: 6, carry: 7, celebrate: 8 } as const;
+export type AnimState = (typeof ANIM)[keyof typeof ANIM];
+export const ANIM_MAX = 8;
 
 export interface BusinessStats {
   customers: number;

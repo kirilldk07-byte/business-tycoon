@@ -1,7 +1,23 @@
 import * as THREE from 'three';
 import type { CosmeticId } from '../../../shared/constants/config';
 import { ANIM } from '../../../shared/types/state';
-import { box, mat } from '../world/World';
+
+// Stylized low-poly humanoid with procedural animation for player avatars.
+// Appearance (outfit color, hair, hat) is purely cosmetic.
+
+const matCache = new Map<string, THREE.MeshStandardMaterial>();
+function m(color: number, extra: Partial<THREE.MeshStandardMaterialParameters> = {}) {
+  const key = color + JSON.stringify(extra);
+  let mm = matCache.get(key);
+  if (!mm) { mm = new THREE.MeshStandardMaterial({ color, roughness: 0.75, flatShading: true, ...extra }); matCache.set(key, mm); }
+  return mm;
+}
+function mesh(geo: THREE.BufferGeometry, color: number, x = 0, y = 0, z = 0, extra?: Partial<THREE.MeshStandardMaterialParameters>) {
+  const o = new THREE.Mesh(geo, m(color, extra));
+  o.position.set(x, y, z);
+  o.castShadow = true;
+  return o;
+}
 
 /** Canvas-backed sprite for name tags / emotes. */
 export class LabelSprite {
@@ -25,8 +41,13 @@ export class LabelSprite {
     const { ctx, canvas } = this;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     if (bg) {
+      // Shrink-wrap the pill to the widest line.
+      let maxW = 0;
+      for (const l of lines) { ctx.font = `800 ${l.size}px system-ui, sans-serif`; maxW = Math.max(maxW, ctx.measureText(l.text).width); }
+      const w = Math.min(canvas.width - 8, maxW + 36);
       ctx.fillStyle = bg;
-      roundRect(ctx, 4, 4, canvas.width - 8, canvas.height - 8, 22);
+      ctx.beginPath();
+      ctx.roundRect((canvas.width - w) / 2, 4, w, canvas.height - 8, 22);
       ctx.fill();
     }
     ctx.textAlign = 'center';
@@ -44,51 +65,40 @@ export class LabelSprite {
   }
 }
 
-function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
-  ctx.closePath();
-}
-
 const at = <T extends THREE.Object3D>(o: T, x: number, y: number, z: number) => { o.position.set(x, y, z); return o; };
 
 export function hatMesh(id: CosmeticId, color: number): THREE.Object3D | null {
   const g = new THREE.Group();
   switch (id) {
     case 'cap': {
-      const dome = new THREE.Mesh(new THREE.SphereGeometry(0.46, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2), mat(color));
-      g.add(dome);
-      const brim = box(0.5, 0.06, 0.45, color, 0, 0, 0.42);
+      g.add(new THREE.Mesh(new THREE.SphereGeometry(0.47, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2), m(color)));
+      const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.34, 0.06, 12, 1, false, -Math.PI / 2, Math.PI), m(color));
+      brim.position.set(0, 0.02, 0.32);
       g.add(brim);
+      g.add(at(new THREE.Mesh(new THREE.SphereGeometry(0.07, 6, 4), m(0xffffff)), 0, 0.46, 0));
       break;
     }
     case 'tophat':
-      g.add(new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.62, 0.06, 16), mat(0x111827)));
-      g.add(at(new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.38, 0.7, 16), mat(0x111827)), 0, 0.36, 0));
-      g.add(at(new THREE.Mesh(new THREE.CylinderGeometry(0.39, 0.39, 0.12, 16), mat(0xdc2626)), 0, 0.1, 0));
+      g.add(new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.62, 0.06, 16), m(0x111827)));
+      g.add(at(new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.38, 0.7, 16), m(0x111827)), 0, 0.36, 0));
+      g.add(at(new THREE.Mesh(new THREE.CylinderGeometry(0.39, 0.39, 0.12, 16), m(0xdc2626)), 0, 0.1, 0));
       break;
     case 'crown': {
-      const gold = mat(0xfacc15, { metalness: 0.7, roughness: 0.3, emissive: 0x6b4f00 });
+      const gold = m(0xfacc15, { metalness: 0.7, roughness: 0.3, emissive: 0x6b4f00 });
       g.add(new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 0.25, 12, 1, true), gold));
       for (let i = 0; i < 6; i++) {
-        const sp = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.25, 4), gold);
         const a = (i / 6) * Math.PI * 2;
-        sp.position.set(Math.cos(a) * 0.38, 0.24, Math.sin(a) * 0.38);
-        g.add(sp);
+        g.add(at(new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.25, 4), gold), Math.cos(a) * 0.38, 0.24, Math.sin(a) * 0.38));
       }
       break;
     }
     case 'chef':
-      g.add(new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.38, 0.4, 14), mat(0xffffff)));
-      g.add(at(new THREE.Mesh(new THREE.SphereGeometry(0.5, 12, 10), mat(0xffffff)), 0, 0.45, 0));
+      g.add(new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.38, 0.4, 14), m(0xffffff)));
+      g.add(at(new THREE.Mesh(new THREE.SphereGeometry(0.5, 12, 10), m(0xffffff)), 0, 0.45, 0));
       break;
     case 'cowboy':
-      g.add(new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.8, 0.06, 18), mat(0x92400e)));
-      g.add(at(new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.42, 0.45, 12), mat(0x92400e)), 0, 0.22, 0));
+      g.add(new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.8, 0.06, 18), m(0x92400e)));
+      g.add(at(new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.42, 0.45, 12), m(0x92400e)), 0, 0.22, 0));
       break;
     default:
       return null;
@@ -97,86 +107,131 @@ export function hatMesh(id: CosmeticId, color: number): THREE.Object3D | null {
   return g;
 }
 
-/**
- * Low-poly player character with procedural animation.
- * Appearance (color/hat) is cosmetic only — no gameplay effect.
- */
+/** Outfit palette per player slot (clearly distinct silhouettes/colors). */
+const OUTFITS = [
+  { pants: 0x1e3a8a, shoes: 0xf8fafc, hair: 0x3b2314, hairStyle: 0 },
+  { pants: 0x3f3f46, shoes: 0x111827, hair: 0xd97706, hairStyle: 1 },
+  { pants: 0x14532d, shoes: 0xf8fafc, hair: 0x111827, hairStyle: 0 },
+  { pants: 0x581c87, shoes: 0xfef3c7, hair: 0x7c2d12, hairStyle: 1 },
+];
+
 export class Character {
   readonly root = new THREE.Group();
   private body = new THREE.Group();
-  private head!: THREE.Group;
+  private hips = new THREE.Group();
+  private chest = new THREE.Group();
+  private head = new THREE.Group();
   private armL = new THREE.Group();
   private armR = new THREE.Group();
+  private foreL = new THREE.Group();
+  private foreR = new THREE.Group();
   private legL = new THREE.Group();
   private legR = new THREE.Group();
+  private shinL = new THREE.Group();
+  private shinR = new THREE.Group();
   private hatSlot = new THREE.Group();
-  readonly tag = new LabelSprite(320, 112, 3.4);
-  private emoteLabel = new LabelSprite(128, 128, 1.6);
+  private crate: THREE.Mesh;
+  readonly tag = new LabelSprite(360, 112, 3.6);
+  private emoteLabel = new LabelSprite(160, 128, 1.8);
   private emoteUntil = 0;
   private phase = 0;
   private animTime = 0;
   private lastAnim = -1;
+  private blend = 0; // 0 idle … 1 full stride (smoothed)
   anim: number = ANIM.idle;
   private ring: THREE.Mesh;
 
-  constructor(public color: number, hat: CosmeticId, isLocal: boolean) {
+  constructor(public color: number, hat: CosmeticId, isLocal: boolean, slot = 0) {
+    const o = OUTFITS[slot % OUTFITS.length];
     const skin = 0xf3c89b;
-    const pants = 0x1f2937;
-    const shirt = mat(color);
-    // Legs
-    for (const [leg, x] of [[this.legL, -0.22], [this.legR, 0.22]] as const) {
-      leg.position.set(x, 0.9, 0);
-      leg.add(box(0.3, 0.85, 0.34, pants, 0, -0.85));
-      leg.add(box(0.34, 0.14, 0.48, 0x111827, 0, -0.9, 0.06));
-      this.body.add(leg);
+    const accent = new THREE.Color(color).offsetHSL(0, 0, -0.18).getHex();
+
+    // Legs (hip pivot → thigh, knee pivot → shin + shoe)
+    for (const [leg, shin, x] of [[this.legL, this.shinL, -0.2], [this.legR, this.shinR, 0.2]] as const) {
+      leg.position.set(x, 0.95, 0);
+      leg.add(mesh(new THREE.CylinderGeometry(0.15, 0.13, 0.5, 7).translate(0, -0.25, 0), o.pants));
+      shin.position.y = -0.48;
+      shin.add(mesh(new THREE.CylinderGeometry(0.13, 0.11, 0.44, 7).translate(0, -0.22, 0), o.pants));
+      shin.add(mesh(new THREE.BoxGeometry(0.24, 0.14, 0.38).translate(0, -0.45, 0.06), o.shoes));
+      leg.add(shin);
+      this.hips.add(leg);
     }
-    // Torso
-    const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.42, 0.6, 4, 10), shirt);
-    torso.position.y = 1.4;
-    torso.castShadow = true;
-    this.body.add(torso);
-    // Belt stripe for extra player distinction
-    this.body.add(box(0.86, 0.12, 0.86, 0xffffff, 0, 1.0));
-    // Arms
-    for (const [arm, x] of [[this.armL, -0.58], [this.armR, 0.58]] as const) {
-      arm.position.set(x, 1.75, 0);
-      const a = new THREE.Mesh(new THREE.CapsuleGeometry(0.13, 0.55, 3, 8), shirt);
-      a.position.y = -0.38;
-      a.castShadow = true;
-      arm.add(a);
-      const hand = new THREE.Mesh(new THREE.SphereGeometry(0.15, 8, 6), mat(skin));
-      hand.position.y = -0.78;
-      arm.add(hand);
-      this.body.add(arm);
+    this.hips.add(mesh(new THREE.CylinderGeometry(0.32, 0.3, 0.26, 8), o.pants, 0, 1.0, 0));
+    this.hips.add(mesh(new THREE.CylinderGeometry(0.33, 0.33, 0.08, 8), 0x1f2937, 0, 1.12, 0)); // belt
+    this.body.add(this.hips);
+
+    // Chest (shirt in the player's color, darker trim, back badge)
+    this.chest.position.y = 1.12;
+    this.chest.add(mesh(new THREE.CylinderGeometry(0.38, 0.31, 0.68, 8).translate(0, 0.34, 0), color));
+    this.chest.add(mesh(new THREE.CylinderGeometry(0.4, 0.4, 0.1, 8), accent, 0, 0.66, 0)); // collar
+    const badge = mesh(new THREE.CircleGeometry(0.17, 12), 0xffffff, 0, 0.42, -0.36);
+    badge.rotation.y = Math.PI;
+    this.chest.add(badge);
+    const num = mesh(new THREE.CircleGeometry(0.11, 12), accent, 0, 0.42, -0.365);
+    num.rotation.y = Math.PI;
+    this.chest.add(num);
+    // Arms: shoulder pivot → upper arm, elbow pivot → forearm + hand
+    for (const [arm, fore, x] of [[this.armL, this.foreL, -0.47], [this.armR, this.foreR, 0.47]] as const) {
+      arm.position.set(x, 0.6, 0);
+      arm.add(mesh(new THREE.SphereGeometry(0.15, 8, 6), color));
+      arm.add(mesh(new THREE.CylinderGeometry(0.12, 0.1, 0.4, 7).translate(0, -0.2, 0), color));
+      fore.position.y = -0.38;
+      fore.add(mesh(new THREE.CylinderGeometry(0.09, 0.08, 0.34, 7).translate(0, -0.17, 0), skin));
+      fore.add(mesh(new THREE.SphereGeometry(0.11, 8, 6), skin, 0, -0.38, 0));
+      arm.add(fore);
+      this.chest.add(arm);
     }
-    // Head
-    this.head = new THREE.Group();
-    this.head.position.y = 2.35;
-    const headMesh = new THREE.Mesh(new THREE.SphereGeometry(0.45, 16, 12), mat(skin));
-    headMesh.castShadow = true;
-    this.head.add(headMesh);
+    // Head: big chibi head with face and hair
+    this.head.position.y = 0.72;
+    this.head.add(mesh(new THREE.CylinderGeometry(0.12, 0.14, 0.18, 7), skin, 0, 0.06, 0));
+    const skull = mesh(new THREE.IcosahedronGeometry(0.44, 2), skin, 0, 0.5, 0);
+    skull.scale.set(1, 0.95, 0.95);
+    this.head.add(skull);
     for (const x of [-0.16, 0.16]) {
-      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), mat(0x111827));
-      eye.position.set(x, 0.05, 0.4);
-      this.head.add(eye);
+      this.head.add(mesh(new THREE.SphereGeometry(0.085, 8, 6), 0xffffff, x, 0.55, 0.37));
+      this.head.add(mesh(new THREE.SphereGeometry(0.05, 8, 6), 0x111827, x, 0.55, 0.43));
+      this.head.add(mesh(new THREE.BoxGeometry(0.15, 0.035, 0.03), o.hair, x, 0.68, 0.4));
+      this.head.add(mesh(new THREE.SphereGeometry(0.06, 6, 4), 0xf9a8a8, x * 1.5, 0.42, 0.33)); // cheeks
     }
-    const mouth = box(0.18, 0.04, 0.04, 0x7c2d12, 0, -0.17, 0.41);
+    this.head.add(mesh(new THREE.SphereGeometry(0.06, 6, 4), 0xeab38a, 0, 0.47, 0.43)); // nose
+    const mouth = mesh(new THREE.TorusGeometry(0.09, 0.022, 4, 10, Math.PI), 0x7c2d12, 0, 0.36, 0.4);
+    mouth.rotation.z = Math.PI;
     this.head.add(mouth);
-    this.hatSlot.position.y = 0.32;
+    if (o.hairStyle === 0) {
+      this.head.add(mesh(new THREE.SphereGeometry(0.47, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.5), o.hair, 0, 0.55, -0.03));
+      const fringe = mesh(new THREE.BoxGeometry(0.7, 0.14, 0.2), o.hair, 0, 0.82, 0.25);
+      fringe.rotation.x = 0.4;
+      this.head.add(fringe);
+    } else {
+      this.head.add(mesh(new THREE.SphereGeometry(0.49, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.55), o.hair, 0, 0.53, -0.05));
+      for (let i = 0; i < 5; i++) {
+        const spike = mesh(new THREE.ConeGeometry(0.12, 0.3, 5), o.hair, -0.28 + i * 0.14, 0.93, 0.05);
+        spike.rotation.x = -0.3;
+        this.head.add(spike);
+      }
+      this.head.add(mesh(new THREE.SphereGeometry(0.2, 8, 6), o.hair, 0, 0.45, -0.38)); // ponytail
+    }
+    this.hatSlot.position.y = 0.86;
     this.head.add(this.hatSlot);
-    this.body.add(this.head);
+    this.chest.add(this.head);
+    this.body.add(this.chest);
     this.setHat(hat);
     this.root.add(this.body);
 
+    // Carry crate (shown during the carry animation)
+    this.crate = mesh(new THREE.BoxGeometry(0.7, 0.55, 0.55), 0xd6a35c, 0, 1.55, 0.55);
+    this.crate.visible = false;
+    this.root.add(this.crate);
+
     // Colored ground ring identifies players at a glance.
-    this.ring = new THREE.Mesh(new THREE.RingGeometry(0.7, 0.95, 24), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: isLocal ? 0.9 : 0.6 }));
+    this.ring = new THREE.Mesh(new THREE.RingGeometry(0.75, 1.0, 28), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: isLocal ? 0.95 : 0.65, depthWrite: false }));
     this.ring.rotation.x = -Math.PI / 2;
-    this.ring.position.y = 0.05;
+    this.ring.position.y = 0.06;
     this.root.add(this.ring);
 
-    this.tag.sprite.position.y = 3.6;
+    this.tag.sprite.position.y = 3.55;
     this.root.add(this.tag.sprite);
-    this.emoteLabel.sprite.position.y = 4.9;
+    this.emoteLabel.sprite.position.y = 4.8;
     this.emoteLabel.sprite.visible = false;
     this.root.add(this.emoteLabel.sprite);
   }
@@ -188,58 +243,84 @@ export class Character {
   }
 
   setTag(name: string, money: string, color: string) {
-    this.tag.draw([{ text: name, color, size: 36 }, { text: money, color: '#fde047', size: 40 }]);
+    this.tag.draw([{ text: name, color, size: 34 }, { text: money, color: '#fde047', size: 40 }]);
   }
 
   showEmote(e: string) {
-    this.emoteLabel.draw([{ text: e, color: '#fff', size: 92 }], 'rgba(255,255,255,0.9)');
+    const gg = e === 'GG';
+    this.emoteLabel.draw([{ text: gg ? 'GG!' : e, color: gg ? '#7c3aed' : '#111', size: gg ? 64 : 84 }], 'rgba(255,255,255,0.95)');
     this.emoteLabel.sprite.visible = true;
-    this.emoteUntil = performance.now() + 2500;
+    this.emoteUntil = performance.now() + 2000;
   }
 
-  /** speed in m/s (horizontal), grounded flag only affects jump pose. */
+  /** speed = horizontal m/s; drives the walk ↔ run blend. */
   update(dt: number, speed: number) {
     const a = this.anim;
     if (a !== this.lastAnim) { this.lastAnim = a; this.animTime = 0; }
     this.animTime += dt;
     const t = this.animTime;
-    let legSwing = 0, armSwing = 0, armRaiseL = 0, armRaiseR = 0, bob = 0, headTilt = 0, lean = 0;
+    const moving = a === ANIM.run || a === ANIM.walk || a === ANIM.carry;
+    this.blend += ((moving ? Math.min(1, speed / 6.5) : 0) - this.blend) * Math.min(1, dt * 10);
+    const s = this.blend;
 
-    if (a === ANIM.run) {
-      this.phase += dt * Math.max(6, speed * 1.6);
-      legSwing = Math.sin(this.phase) * 0.9;
-      armSwing = Math.sin(this.phase) * 0.8;
-      bob = Math.abs(Math.sin(this.phase)) * 0.12;
-      lean = 0.12;
-    } else if (a === ANIM.jump) {
-      legSwing = 0.5; armRaiseL = armRaiseR = -2.4;
-    } else if (a === ANIM.interact) {
-      armRaiseR = -1.3 + Math.sin(t * 18) * 0.35;
-      armRaiseL = -0.4;
-      lean = 0.08;
-    } else if (a === ANIM.victory) {
-      bob = Math.abs(Math.sin(t * 6)) * 0.6;
-      armRaiseL = armRaiseR = -2.7 + Math.sin(t * 12) * 0.2;
-    } else if (a === ANIM.lose) {
-      headTilt = 0.5; lean = 0.25; armRaiseL = armRaiseR = 0.15;
-      bob = -0.1;
-    } else {
-      bob = Math.sin(performance.now() / 500) * 0.03;
+    let thighL = 0, thighR = 0, kneeL = 0, kneeR = 0, shL = 0, shR = 0, elL = 0, elR = 0;
+    let bob = 0, lean = 0, headX = 0, headY = 0, spin = 0, armOutL = 0.08, armOutR = -0.08;
+
+    if (moving) {
+      this.phase += dt * (4 + speed * 1.35);
+      const p = this.phase;
+      const stride = 0.35 + 0.55 * s;
+      thighL = Math.sin(p) * stride;
+      thighR = -Math.sin(p) * stride;
+      kneeL = Math.max(0, -Math.cos(p)) * (0.4 + 0.7 * s);
+      kneeR = Math.max(0, Math.cos(p)) * (0.4 + 0.7 * s);
+      shL = -Math.sin(p) * (0.3 + 0.6 * s);
+      shR = Math.sin(p) * (0.3 + 0.6 * s);
+      elL = elR = -0.3 - 0.6 * s;
+      bob = Math.abs(Math.sin(p)) * (0.04 + 0.1 * s);
+      lean = 0.04 + 0.14 * s;
     }
-    this.legL.rotation.x = legSwing;
-    this.legR.rotation.x = a === ANIM.jump ? -0.6 : -legSwing;
-    this.armL.rotation.x = armRaiseL || -armSwing;
-    this.armR.rotation.x = armRaiseR || armSwing;
-    this.armL.rotation.z = a === ANIM.victory ? 0.3 : 0.05;
-    this.armR.rotation.z = a === ANIM.victory ? -0.3 : -0.05;
+    if (a === ANIM.carry) { shL = shR = -1.25; elL = elR = -0.35; armOutL = 0.25; armOutR = -0.25; lean = 0.02; }
+    if (a === ANIM.idle) {
+      const br = Math.sin(performance.now() / 600);
+      bob = br * 0.015;
+      shL = shR = 0.05 + br * 0.03;
+      headY = Math.sin(performance.now() / 2300) * 0.15;
+    } else if (a === ANIM.jump) {
+      thighL = -0.9; kneeL = 1.3; thighR = 0.3; kneeR = 0.4; shL = shR = -2.5; elL = elR = -0.3;
+    } else if (a === ANIM.interact) {
+      shR = -1.4 + Math.sin(t * 16) * 0.3; elR = -0.4; shL = -0.5; elL = -0.7; lean = 0.1;
+    } else if (a === ANIM.celebrate) {
+      bob = Math.abs(Math.sin(t * 7)) * 0.25;
+      shL = shR = -2.6; armOutL = 0.5 + Math.sin(t * 14) * 0.25; armOutR = -0.5 - Math.sin(t * 14) * 0.25;
+    } else if (a === ANIM.victory) {
+      bob = Math.abs(Math.sin(t * 5)) * 0.55;
+      shL = -2.8; elL = -0.2; shR = -2.8 + Math.sin(t * 10) * 0.25; armOutL = 0.35; armOutR = -0.35;
+      spin = t * 1.2;
+      thighL = thighR = -Math.abs(Math.sin(t * 5)) * 0.3; kneeL = kneeR = Math.abs(Math.sin(t * 5)) * 0.6;
+    } else if (a === ANIM.lose) {
+      headX = 0.55; lean = 0.32; shL = shR = 0.25; elL = elR = -0.2; bob = -0.12; kneeL = kneeR = 0.35; thighL = thighR = -0.2;
+    }
+
+    this.legL.rotation.x = thighL; this.legR.rotation.x = thighR;
+    this.shinL.rotation.x = kneeL; this.shinR.rotation.x = kneeR;
+    this.armL.rotation.set(shL, 0, armOutL); this.armR.rotation.set(shR, 0, armOutR);
+    this.foreL.rotation.x = elL; this.foreR.rotation.x = elR;
     this.body.position.y = bob;
-    this.body.rotation.x = lean;
-    this.head.rotation.x = headTilt;
+    this.chest.rotation.x = lean;
+    this.head.rotation.set(headX, headY, 0);
+    this.body.rotation.y = a === ANIM.victory ? Math.sin(spin) * 0.6 : 0;
+    this.crate.visible = a === ANIM.carry;
 
     if (this.emoteLabel.sprite.visible) {
       const left = this.emoteUntil - performance.now();
       if (left <= 0) this.emoteLabel.sprite.visible = false;
-      else this.emoteLabel.sprite.position.y = 4.9 + (2500 - left) / 2500 * 0.8;
+      else {
+        const k = (2000 - left) / 2000;
+        this.emoteLabel.sprite.position.y = 4.8 + k * 0.6;
+        const pop = k < 0.12 ? 0.4 + (k / 0.12) * 0.6 : 1;
+        this.emoteLabel.sprite.scale.set(1.8 * pop, 1.44 * pop, 1);
+      }
     }
   }
 }

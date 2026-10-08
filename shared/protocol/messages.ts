@@ -82,7 +82,8 @@ export const ERR = {
 } as const;
 export type ErrCode = (typeof ERR)[keyof typeof ERR];
 
-export const EMOTES = ['👋', '😂', '🔥', '😎', '😡'] as const;
+export const EMOTES = ['👋', '🔥', '😂', '😎', '😱', 'GG'] as const;
+export const EMOTE_COOLDOWN_MS = 1500;
 
 /** Compact movement tuple: x, y, z, rotY, anim */
 export type MoveTuple = [number, number, number, number, number];

@@ -215,5 +215,8 @@ export class BusinessView {
     this.customers.update(dt, serverNow);
   }
 
+  /** Big objects the camera must not pass through. */
+  cameraBlockers(): THREE.Object3D[] { return [this.buildingSlot]; }
+
   clearDynamic() { this.customers.clear(); }
 }
