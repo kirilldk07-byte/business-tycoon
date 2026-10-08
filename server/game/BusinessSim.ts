@@ -143,8 +143,9 @@ export class BusinessSim {
     if (ipm > b.stats.peakIncome) b.stats.peakIncome = ipm;
   }
 
+  /** Queue pressure: waiting customers count fully, ones still walking count half (long walk ≠ full queue). */
   private flagshipLoad() {
-    return this.walking.filter((w) => w.dest < 0).length + this.queue.length;
+    return this.walking.filter((w) => w.dest < 0).length * 0.5 + this.queue.length;
   }
 
   /** Spawn a flagship customer. reward overrides the price (VIP flat reward). */

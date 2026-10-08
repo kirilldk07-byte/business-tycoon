@@ -121,9 +121,9 @@ async function main() {
   A.send({ t: C2S.BUILD_MEGA_MALL });
   await A.wait(S2C.ERROR, (m) => m.code === 'LOCKED');
   ok(true, 'MEGA MALL locked until requirements met');
-  A.send({ t: C2S.DEV, cmd: 'addMoney', arg: 5_000_000 });
+  A.send({ t: C2S.DEV, cmd: 'addMoney', arg: 20_000_000 });
   await A.wait(S2C.BUSINESS_UPDATE, (m) => m.cause === 'dev');
-  for (let i = 0; i < 7; i++) A.send({ t: C2S.BUILD_BUSINESS, kind: 'tier' });
+  for (let i = 0; i < 9; i++) A.send({ t: C2S.BUILD_BUSINESS, kind: 'tier' });
   for (const id of ['price', 'customers', 'capacity'] as const) for (let i = 0; i < 4; i++) B.send({ t: C2S.BUY_UPGRADE, id });
   await sleep(1500);
   B.send({ t: C2S.BUILD_MEGA_MALL });

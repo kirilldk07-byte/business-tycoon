@@ -94,7 +94,8 @@ export function venueRates(b: BusinessState, id: VenueId, r: Rates = computeRate
 /** Rough $/minute for HUD and the balance bot. */
 export function incomePerMinute(b: BusinessState): number {
   const r = computeRates(b);
-  let perSec = Math.min(r.spawnRate, r.serviceRate + 0.3) * r.price;
+  // Flagship sales are capped by arrivals, service speed and stock production.
+  let perSec = Math.min(r.spawnRate, r.serviceRate + 0.3, r.production + 0.2) * r.price;
   for (const id of VENUE_IDS) { const v = venueRates(b, id, r); perSec += v.rate * v.price; }
   return Math.round(perSec * 60);
 }

@@ -13,7 +13,7 @@ export type VenueId = (typeof VENUE_IDS)[number];
 
 export const MATCH = {
   maxPlayers: { vs: 2, coop: 2, solo: 1 },
-  durationMs: { vs: 10 * 60_000, coop: 15 * 60_000, solo: 15 * 60_000 },
+  durationMs: { vs: 10 * 60_000, coop: 18 * 60_000, solo: 18 * 60_000 },
   countdownMs: 3_500,
   startCash: 100,
   reconnectGraceMs: 45_000,
@@ -26,15 +26,15 @@ export const ECONOMY = {
   basePrice: 10,
   /** Flagship price multiplier per HQ tier (index = tier-1). */
   tierPriceMult: [1, 1.8, 3, 5, 8, 13, 20, 32, 50, 80],
-  customerSpeed: 2.8, // m/s; walk time = path length / speed (shared with clients)
+  customerSpeed: 3.3, // m/s; walk time = path length / speed (shared with clients)
   patienceMs: 25_000,
-  baseSpawnRate: 0.55, // flagship customers / second
-  baseServiceRate: 0.45, // automatic serving without staff
-  baseProduction: 0.6, // stock / second
+  baseSpawnRate: 0.8, // flagship customers / second
+  baseServiceRate: 0.6, // automatic serving without staff
+  baseProduction: 1.0, // stock / second
   manualProduce: 4, // stock per press
   manualProduceCooldownMs: 300,
   manualServeCooldownMs: 250,
-  startStock: 12,
+  startStock: 20,
   goldenPriceMult: 10,
   deliveryIntervalMs: 8_000,
   /** Venue level multipliers (index = level-1) and expansion cost factors. */
@@ -90,12 +90,12 @@ export const TIERS = [
  */
 export interface VenueDef { name: string; icon: string; sign: string; cost: number; price: number; rate: number; minTier: number; color: number }
 export const VENUES: Record<VenueId, VenueDef> = {
-  burger: { name: 'Burger Shop', icon: '🍔', sign: 'BURGERS', cost: 600, price: 18, rate: 0.35, minTier: 1, color: 0xef4444 },
-  restaurant: { name: 'Restaurant', icon: '🍝', sign: 'RESTAURANT', cost: 3200, price: 55, rate: 0.35, minTier: 2, color: 0x7c3aed },
-  supermarket: { name: 'Supermarket', icon: '🛒', sign: 'SUPERMARKET', cost: 14000, price: 120, rate: 0.5, minTier: 3, color: 0x16a34a },
-  cars: { name: 'Car Dealership', icon: '🚗', sign: 'AUTO CENTER', cost: 45000, price: 1400, rate: 0.12, minTier: 4, color: 0x0284c7 },
-  hotel: { name: 'Hotel', icon: '🏨', sign: 'HOTEL', cost: 130000, price: 1600, rate: 0.28, minTier: 5, color: 0xdb2777 },
-  mall: { name: 'Shopping Mall', icon: '🏬', sign: 'MALL', cost: 360000, price: 2200, rate: 0.55, minTier: 6, color: 0xf59e0b },
+  burger: { name: 'Burger Shop', icon: '🍔', sign: 'BURGERS', cost: 350, price: 18, rate: 0.35, minTier: 1, color: 0xef4444 },
+  restaurant: { name: 'Restaurant', icon: '🍝', sign: 'RESTAURANT', cost: 1500, price: 55, rate: 0.35, minTier: 2, color: 0x7c3aed },
+  supermarket: { name: 'Supermarket', icon: '🛒', sign: 'SUPERMARKET', cost: 6000, price: 120, rate: 0.5, minTier: 3, color: 0x16a34a },
+  cars: { name: 'Car Dealership', icon: '🚗', sign: 'AUTO CENTER', cost: 20000, price: 1400, rate: 0.12, minTier: 4, color: 0x0284c7 },
+  hotel: { name: 'Hotel', icon: '🏨', sign: 'HOTEL', cost: 60000, price: 1600, rate: 0.28, minTier: 5, color: 0xdb2777 },
+  mall: { name: 'Shopping Mall', icon: '🏬', sign: 'MALL', cost: 180000, price: 2200, rate: 0.55, minTier: 6, color: 0xf59e0b },
 };
 
 // BUSINESS VALUE = cash + spend per category × weight.
@@ -103,8 +103,8 @@ export const VALUE_WEIGHTS = { cash: 1, building: 1, structure: 1, venue: 1, upg
 
 export const COOP_GOAL = {
   name: 'MEGA MALL',
-  cost: 1_000_000,
-  minTier: 8,
+  cost: 5_000_000,
+  minTier: 9,
   minUpgrades: { price: 4, customers: 4, capacity: 4 } as Partial<Record<UpgradeId, number>>,
 };
 
@@ -137,7 +137,7 @@ export const GOLDEN = { firstMs: 40_000, minGapMs: 70_000, maxGapMs: 110_000 };
 /** VIP reward is a flat amount by match time — identical for both players (comeback-friendly, no rubber-banding). */
 export function vipReward(elapsedMs: number): number {
   const min = elapsedMs / 60_000;
-  return Math.round((400 * Math.pow(1.75, min)) / 50) * 50;
+  return Math.round((500 * Math.pow(2.2, min)) / 50) * 50;
 }
 
 export const PLAYER = {
