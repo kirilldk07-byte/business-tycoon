@@ -34,8 +34,12 @@ export class Platform {
   get available() { return !!this.ysdk; }
 
   async init() {
-    // On Yandex the SDK is served from the same origin at /sdk.js.
-    if (!window.YaGames) await loadScript('/sdk.js', 4000);
+    // On Yandex the SDK is served from the same origin at /sdk.js. Games run inside the
+    // Yandex iframe (or on yandex/playhop hosts) — elsewhere skip it (no 404 in the console).
+    let framed = true;
+    try { framed = window.self !== window.top; } catch { /* cross-origin parent → framed */ }
+    const onYandex = framed || /yandex|playhop/i.test(location.hostname);
+    if (!window.YaGames && onYandex) await loadScript('/sdk.js', 4000);
     if (!window.YaGames) { console.info('[platform] Yandex SDK not available — standalone mode'); return; }
     try {
       this.ysdk = await window.YaGames.init();
