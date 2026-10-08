@@ -1,66 +1,124 @@
-import { ECONOMY } from '../../shared/constants/config';
-import { businessValue, computeRates, type Modifiers } from '../../shared/game/economy';
+import { ECONOMY, EVENTS, VENUE_IDS } from '../../shared/constants/config';
+import { CUSTOMER_KIND } from '../../shared/events';
+import { businessValue, computeRates, venueRates, type Modifiers } from '../../shared/game/economy';
+import { sideForVenue, walkMs } from '../../shared/game/paths';
 import type { BusinessState, BusinessTick } from '../../shared/types/state';
 
 export interface SimEmitter {
-  spawn(b: number, id: number, golden: boolean, arrive: number, side: number): void;
-  served(b: number, id: number, amt: number, by?: string): void;
+  spawn(b: number, id: number, dest: number, kind: number, arrive: number, side: number): void;
+  paid(b: number, id: number, amt: number): void;
   left(b: number, id: number): void;
   delivery(b: number, amt: number): void;
 }
 
-interface Walking { id: number; arrive: number; golden: boolean }
-interface Queued { id: number; golden: boolean; arrivedAt: number }
+interface Walking { id: number; dest: number; arrive: number; kind: number; reward: number }
+interface Queued { id: number; kind: number; arrivedAt: number; reward: number }
 
-/** Authoritative per-business economy simulation. All money changes happen here or in Room purchases. */
+const BUCKET_MS = 5_000;
+const BUCKETS = 12; // 60 s window
+
+/**
+ * Authoritative per-business economy simulation. All income happens here;
+ * purchases go through spend(). Flagship = manual counter + production;
+ * venues = automated businesses whose customers pay when they reach the door.
+ */
 export class BusinessSim {
   private spawnAcc = 0;
   private serviceAcc = 0;
   private deliveryAcc = 0;
+  private venueAcc = new Map<number, number>();
   private walking: Walking[] = [];
   private queue: Queued[] = [];
+  private buckets: number[] = new Array(BUCKETS).fill(0);
+  private bucketStart = 0;
+  private bucketIdx = 0;
 
   constructor(public b: BusinessState, private nextId: () => number) {}
 
-  step(dtMs: number, now: number, mods: Modifiers, emit: SimEmitter) {
+  private earn(amt: number, now: number) {
+    this.b.cash += amt;
+    this.b.stats.income += amt;
+    this.rollBuckets(now);
+    this.buckets[this.bucketIdx] += amt;
+  }
+
+  private rollBuckets(now: number) {
+    if (!this.bucketStart) this.bucketStart = now;
+    while (now - this.bucketStart >= BUCKET_MS) {
+      this.bucketStart += BUCKET_MS;
+      this.bucketIdx = (this.bucketIdx + 1) % BUCKETS;
+      this.buckets[this.bucketIdx] = 0;
+    }
+  }
+
+  /** Income over the last 60 s. */
+  ipm(now: number) {
+    this.rollBuckets(now);
+    return Math.round(this.buckets.reduce((a, x) => a + x, 0));
+  }
+
+  step(dtMs: number, now: number, baseMods: Modifiers, emit: SimEmitter) {
     const b = this.b;
+    const mods = b.boostUntil > now ? { ...baseMods, productionMult: baseMods.productionMult * EVENTS.deliveryBoostMult } : baseMods;
     const r = computeRates(b, mods);
     const dt = dtMs / 1000;
 
-    // Spawn customers (they walk to the counter for walkTimeMs).
+    // Flagship customers
     this.spawnAcc += r.spawnRate * dt;
     while (this.spawnAcc >= 1) {
       this.spawnAcc -= 1;
-      if (this.walking.length + this.queue.length < r.capacity) this.spawnCustomer(now, false, emit);
+      if (this.flagshipLoad() < r.capacity) this.spawnCustomer(now, CUSTOMER_KIND.normal, emit);
     }
+    // Venue customers (automated businesses)
+    VENUE_IDS.forEach((vid, idx) => {
+      const v = venueRates(b, vid, r);
+      if (!v.rate) return;
+      let acc = (this.venueAcc.get(idx) ?? 0) + v.rate * dt;
+      while (acc >= 1) {
+        acc -= 1;
+        const inFlight = this.walking.filter((w) => w.dest === idx).length;
+        if (inFlight < v.cap) {
+          const id = this.nextId();
+          const side = sideForVenue(idx);
+          const arrive = now + walkMs(idx, side);
+          this.walking.push({ id, dest: idx, arrive, kind: CUSTOMER_KIND.normal, reward: v.price });
+          emit.spawn(b.id, id, idx, CUSTOMER_KIND.normal, arrive, side);
+        }
+      }
+      this.venueAcc.set(idx, acc);
+    });
 
-    // Arrivals join the queue.
+    // Arrivals: venue customers pay at the door; flagship customers queue.
     for (let i = this.walking.length - 1; i >= 0; i--) {
       const w = this.walking[i];
-      if (w.arrive <= now) {
-        this.walking.splice(i, 1);
-        this.queue.push({ id: w.id, golden: w.golden, arrivedAt: now });
+      if (w.arrive > now) continue;
+      this.walking.splice(i, 1);
+      if (w.dest >= 0) {
+        this.earn(w.reward, now);
+        b.stats.customers += 1;
+        emit.paid(b.id, w.id, w.reward);
+      } else {
+        this.queue.push({ id: w.id, kind: w.kind, arrivedAt: now, reward: w.reward });
       }
     }
 
-    // Impatient customers leave without paying (golden ones wait forever).
+    // Impatient customers leave (golden/VIP wait forever).
     for (let i = this.queue.length - 1; i >= 0; i--) {
       const q = this.queue[i];
-      if (!q.golden && now - q.arrivedAt > ECONOMY.patienceMs) {
+      if (q.kind === CUSTOMER_KIND.normal && now - q.arrivedAt > ECONOMY.patienceMs) {
         this.queue.splice(i, 1);
         emit.left(b.id, q.id);
       }
     }
 
-    // Production.
-    b.stock = Math.min(r.stockCap, b.stock + r.production * dt);
+    if (b.tier >= 1) b.stock = Math.min(r.stockCap, b.stock + r.production * dt);
 
-    // Automatic service.
+    // Automatic counter service
     if (this.queue.length > 0 && b.stock >= 1) {
       this.serviceAcc += r.serviceRate * dt;
       while (this.serviceAcc >= 1 && this.queue.length > 0 && b.stock >= 1) {
         this.serviceAcc -= 1;
-        this.serveFront(r.price, emit);
+        this.serveFront(r.price, emit, now);
       }
     } else {
       this.serviceAcc = Math.min(this.serviceAcc, 1);
@@ -75,26 +133,34 @@ export class BusinessSim {
         if (units > 0) {
           const amt = Math.round(units * r.price * 1.5);
           b.stock -= units;
-          b.cash += amt;
-          b.stats.income += amt;
+          this.earn(amt, now);
           emit.delivery(b.id, amt);
         }
       }
     }
     b.queue = this.queue.length;
+    const ipm = this.ipm(now);
+    if (ipm > b.stats.peakIncome) b.stats.peakIncome = ipm;
   }
 
-  spawnCustomer(now: number, golden: boolean, emit: SimEmitter) {
+  private flagshipLoad() {
+    return this.walking.filter((w) => w.dest < 0).length + this.queue.length;
+  }
+
+  /** Spawn a flagship customer. reward overrides the price (VIP flat reward). */
+  spawnCustomer(now: number, kind: number, emit: SimEmitter, reward = 0) {
+    if (this.b.tier < 1) return;
     const id = this.nextId();
-    const arrive = now + ECONOMY.walkTimeMs;
-    this.walking.push({ id, arrive, golden });
-    emit.spawn(this.b.id, id, golden, arrive, Math.random() < 0.5 ? 0 : 1);
+    const side = Math.random() < 0.5 ? 0 : 1;
+    const arrive = now + walkMs(-1, side);
+    this.walking.push({ id, dest: -1, arrive, kind, reward });
+    emit.spawn(this.b.id, id, -1, kind, arrive, side);
   }
 
   /** Manual serve by a player at the counter. Returns true if someone was served. */
-  manualServe(mods: Modifiers, emit: SimEmitter, by: string): boolean {
+  manualServe(mods: Modifiers, emit: SimEmitter, now: number): boolean {
     if (this.queue.length === 0 || this.b.stock < 1) return false;
-    this.serveFront(computeRates(this.b, mods).price, emit, by);
+    this.serveFront(computeRates(this.b, mods).price, emit, now);
     this.b.queue = this.queue.length;
     return true;
   }
@@ -106,18 +172,17 @@ export class BusinessSim {
     return this.b.stock - before;
   }
 
-  private serveFront(price: number, emit: SimEmitter, by?: string) {
+  private serveFront(price: number, emit: SimEmitter, now: number) {
     const q = this.queue.shift()!;
-    const amt = q.golden ? price * ECONOMY.goldenPriceMult : price;
+    const amt = q.kind === CUSTOMER_KIND.vip ? q.reward : q.kind === CUSTOMER_KIND.golden ? price * ECONOMY.goldenPriceMult : price;
     this.b.stock -= 1;
-    this.b.cash += amt;
     this.b.stats.customers += 1;
-    this.b.stats.income += amt;
-    emit.served(this.b.id, q.id, amt, by);
+    this.earn(amt, now);
+    emit.paid(this.b.id, q.id, amt);
   }
 
   /** Spend money authoritatively. Caller has already validated. */
-  spend(cost: number, category: 'spentBuilding' | 'spentStructure' | 'spentUpgrade' | 'spentWorker') {
+  spend(cost: number, category: 'spentBuilding' | 'spentStructure' | 'spentUpgrade' | 'spentWorker' | 'spentVenue') {
     this.b.cash -= cost;
     this.b.stats[category] += cost;
     this.refreshValue();
@@ -125,10 +190,10 @@ export class BusinessSim {
 
   refreshValue() { this.b.value = businessValue(this.b); }
 
-  tick(): BusinessTick {
+  tick(now: number): BusinessTick {
     this.refreshValue();
     const b = this.b;
-    return { id: b.id, cash: Math.floor(b.cash), stock: Math.floor(b.stock), queue: b.queue, value: b.value, customers: b.stats.customers };
+    return { id: b.id, cash: Math.floor(b.cash), stock: Math.floor(b.stock), queue: b.queue, value: b.value, customers: b.stats.customers, ipm: this.ipm(now) };
   }
 
   /** Customers in flight are not persisted; restored sims start with empty queues. */

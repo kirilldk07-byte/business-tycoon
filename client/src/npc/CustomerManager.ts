@@ -1,130 +1,190 @@
 import * as THREE from 'three';
 import { PLOT_LOCAL } from '../../../shared/constants/world';
-import { hatMesh } from '../player/Character';
-import { mulberry, pedestrianMesh } from '../world/World';
+import { CUSTOMER_KIND } from '../../../shared/events';
+import { customerPath, walkMs, type P2 } from '../../../shared/game/paths';
+import { mulberry } from '../world/geo';
+import { randomLook, type Crowd } from './Crowd';
 
-// Visual NPC customers. Timing comes from the server (arrive time in server
-// clock), so both devices show customers reaching the counter together.
+// Visual NPC customers for one business, rendered through the shared instanced
+// Crowd. Timing comes from the server clock (arrive time), so both devices show
+// a customer reaching the door at the same moment.
 
 interface Npc {
   id: number;
-  mesh: THREE.Group | null;
-  state: 'walking' | 'queued' | 'leaving';
+  slot: number; // crowd instance, -1 = simulated but not drawn (over budget)
+  dest: number;
+  kind: number;
+  path: P2[];
+  cum: number[];
+  startAt: number;
   arrive: number;
-  golden: boolean;
-  exit: THREE.Vector3;
+  state: 'walk' | 'queue' | 'enter' | 'leave';
+  x: number; z: number; rot: number;
   phase: number;
-  fade: number;
+  t: number; // state timer
+  exit: P2[];
+  exitI: number;
 }
 
-const SHIRTS = [0x60a5fa, 0xf472b6, 0x34d399, 0xfbbf24, 0xa78bfa, 0xf87171, 0x2dd4bf, 0xfb923c];
-const MAX_VISIBLE = 26;
+export interface SpecialMarker { kind: number; x: number; z: number }
+
+const QUEUE_START = PLOT_LOCAL.counter.lx + 1.8;
 
 export class CustomerManager {
   private npcs = new Map<number, Npc>();
-  private order: number[] = []; // walking + queued, by arrival
+  private order: number[] = []; // flagship queue (walking + waiting) in arrival order
   private rnd = mulberry(3);
-  private tmp = new THREE.Vector3();
+  private v = new THREE.Vector3();
+  visibleCount = 0;
 
-  constructor(private root: THREE.Group) {}
+  constructor(private root: THREE.Object3D, private crowd: Crowd, private maxVisible: number) {}
 
-  private slotPos(i: number, out: THREE.Vector3) {
-    const c = PLOT_LOCAL.counter;
-    // Snake the line when it gets long.
-    const row = Math.floor(i / 8), col = i % 8;
-    const lz = row === 0 ? 0 : (row % 2 ? -1 : 1) * Math.ceil(row / 2) * 1.3;
-    return out.set(c.lx + 1.6 + col * 1.05, 0, lz);
+  private cumulative(path: P2[]) {
+    const c = [0];
+    for (let i = 1; i < path.length; i++) c.push(c[i - 1] + Math.hypot(path[i].lx - path[i - 1].lx, path[i].lz - path[i - 1].lz));
+    return c;
   }
 
-  spawn(id: number, golden: boolean, arrive: number, side: number) {
-    const visible = [...this.npcs.values()].filter((n) => n.mesh).length < MAX_VISIBLE || golden;
-    let mesh: THREE.Group | null = null;
-    if (visible) {
-      mesh = pedestrianMesh(golden ? 0xfacc15 : SHIRTS[Math.floor(this.rnd() * SHIRTS.length)]);
-      if (golden) {
-        const crown = hatMesh('crown', 0xfacc15)!;
-        crown.position.y = 2.05;
-        crown.scale.setScalar(0.7);
-        mesh.add(crown);
-      }
-      const s = PLOT_LOCAL.customerSpawn[side % PLOT_LOCAL.customerSpawn.length];
-      mesh.position.set(s.lx, 0, s.lz + (this.rnd() - 0.5) * 3);
-      this.root.add(mesh);
+  spawn(id: number, dest: number, kind: number, arrive: number, side: number) {
+    if (this.npcs.has(id)) return;
+    const path = customerPath(dest, side);
+    const special = kind !== CUSTOMER_KIND.normal;
+    let slot = -1;
+    if (this.visibleCount < this.maxVisible || special) {
+      const look = randomLook(this.rnd, kind === CUSTOMER_KIND.golden ? 0xfacc15 : kind === CUSTOMER_KIND.vip ? 0x312e81 : undefined);
+      slot = this.crowd.alloc(look);
+      if (slot >= 0) this.visibleCount++;
     }
-    const exitSide = PLOT_LOCAL.customerSpawn[(side + 1) % PLOT_LOCAL.customerSpawn.length];
-    this.npcs.set(id, { id, mesh, state: 'walking', arrive, golden, exit: new THREE.Vector3(exitSide.lx + 4, 0, exitSide.lz), phase: this.rnd() * 6, fade: 1 });
-    this.order.push(id);
+    const n: Npc = {
+      id, slot, dest, kind, path, cum: this.cumulative(path), startAt: arrive - walkMs(dest, side), arrive,
+      state: 'walk', x: path[0].lx, z: path[0].lz, rot: 0, phase: this.rnd() * 6, t: 0, exit: [], exitI: 0,
+    };
+    this.npcs.set(id, n);
+    if (dest < 0) this.order.push(id);
   }
 
-  /** Returns the npc's local position (for effects), or the counter if unknown. */
-  served(id: number): THREE.Vector3 {
-    return this.release(id, false);
+  /** Returns local position of the payment (for effects). */
+  paid(id: number): THREE.Vector3 {
+    const n = this.npcs.get(id);
+    if (!n) return this.fallbackPos();
+    if (n.dest >= 0) {
+      n.state = 'enter';
+      n.t = 0;
+      const door = n.path[n.path.length - 1];
+      return new THREE.Vector3(door.lx, 0, door.lz);
+    }
+    this.startLeaving(n);
+    return new THREE.Vector3(PLOT_LOCAL.counter.lx + 1.2, 0, PLOT_LOCAL.counter.lz);
   }
 
   left(id: number): THREE.Vector3 {
-    return this.release(id, true);
-  }
-
-  private release(id: number, angry: boolean): THREE.Vector3 {
-    const c = PLOT_LOCAL.counter;
     const n = this.npcs.get(id);
-    this.order = this.order.filter((x) => x !== id);
-    if (!n) return new THREE.Vector3(c.lx + 1.5, 0, 0);
-    n.state = 'leaving';
-    if (angry && n.mesh) n.mesh.rotation.z = 0;
-    return n.mesh ? n.mesh.position.clone() : new THREE.Vector3(c.lx + 1.5, 0, 0);
+    if (!n) return this.fallbackPos();
+    this.startLeaving(n);
+    return new THREE.Vector3(n.x, 0, n.z);
   }
 
-  get goldenWaiting() { return [...this.npcs.values()].some((n) => n.golden && n.state !== 'leaving'); }
+  private fallbackPos() { return new THREE.Vector3(PLOT_LOCAL.counter.lx + 1.5, 0, 0); }
+
+  private startLeaving(n: Npc) {
+    this.order = this.order.filter((x) => x !== n.id);
+    n.state = 'leave';
+    const sg = n.z >= 0 ? 1 : -1;
+    const s = PLOT_LOCAL.customerSpawn[sg > 0 ? 0 : 1];
+    n.exit = [{ lx: n.x, lz: sg * 3.6 }, { lx: 23, lz: sg * 3.6 }, { lx: s.lx, lz: sg * 3.6 }, { lx: s.lx, lz: s.lz }];
+    n.exitI = 0;
+  }
+
+  /** Golden / VIP customers currently visible (for auras), plot-local coords. */
+  specials(out: SpecialMarker[]) {
+    for (const n of this.npcs.values()) if (n.kind !== CUSTOMER_KIND.normal && n.state !== 'enter') out.push({ kind: n.kind, x: n.x, z: n.z });
+  }
+
+  get queueLength() { return this.order.length; }
 
   update(dt: number, serverNow: number) {
-    this.order.forEach((id, i) => {
+    // Flagship queue slots
+    let qi = 0;
+    for (const id of this.order) {
       const n = this.npcs.get(id)!;
-      if (n.state === 'walking' && serverNow >= n.arrive) n.state = 'queued';
-      if (!n.mesh) return;
-      const target = this.slotPos(i, this.tmp);
-      const d = target.clone().sub(n.mesh.position);
-      const dist = d.length();
-      let speed = 3.2;
-      if (n.state === 'walking') speed = Math.min(7, Math.max(1.5, dist / Math.max(0.15, (n.arrive - serverNow) / 1000)));
-      this.moveNpc(n, d, dist, speed, dt);
-    });
+      if (n.state === 'walk' && serverNow >= n.arrive) n.state = 'queue';
+      if (n.state === 'queue') {
+        const tx = QUEUE_START + (qi % 12) * 1.05;
+        const row = Math.floor(qi / 12);
+        const tz = row === 0 ? 0 : (row % 2 ? -1 : 1) * Math.ceil(row / 2) * 1.3;
+        this.moveTo(n, tx, tz, 3.2, dt, Math.PI * -0.5);
+      }
+      qi++;
+    }
     for (const n of [...this.npcs.values()]) {
-      if (n.state !== 'leaving') continue;
-      if (!n.mesh) { this.npcs.delete(n.id); continue; }
-      const d = n.exit.clone().sub(n.mesh.position);
-      const dist = d.length();
-      this.moveNpc(n, d, dist, 3.5, dt);
-      if (dist < 1.2) {
-        n.fade -= dt * 2;
-        n.mesh.scale.setScalar(Math.max(0.01, n.fade));
-        if (n.fade <= 0) {
-          this.root.remove(n.mesh);
-          this.npcs.delete(n.id);
+      if (n.state === 'walk') {
+        const total = n.cum[n.cum.length - 1];
+        const k = Math.min(1, Math.max(0, (serverNow - n.startAt) / Math.max(1, n.arrive - n.startAt)));
+        const d = k * total;
+        let i = 1;
+        while (i < n.cum.length - 1 && n.cum[i] < d) i++;
+        const a = n.path[i - 1], b = n.path[i];
+        const seg = n.cum[i] - n.cum[i - 1] || 1;
+        const f = Math.min(1, Math.max(0, (d - n.cum[i - 1]) / seg));
+        n.x = a.lx + (b.lx - a.lx) * f;
+        n.z = a.lz + (b.lz - a.lz) * f;
+        n.rot = Math.atan2(b.lx - a.lx, b.lz - a.lz);
+        n.phase += dt * 8;
+        if (n.dest >= 0 && k >= 1) { n.state = 'enter'; n.t = 0; }
+        this.draw(n, 0.6);
+      } else if (n.state === 'enter') {
+        n.t += dt;
+        const door = n.path[n.path.length - 1];
+        n.x += (door.lx - n.x) * Math.min(1, dt * 6);
+        n.z += (door.lz - n.z) * Math.min(1, dt * 6);
+        const scale = Math.max(0.01, 1 - n.t / 0.45);
+        this.draw(n, 0.6, scale);
+        if (n.t > 0.45) this.remove(n);
+      } else if (n.state === 'leave') {
+        const target = n.exit[n.exitI];
+        const arrived = this.moveTo(n, target.lx, target.lz, 3.4, dt);
+        if (arrived) {
+          n.exitI++;
+          if (n.exitI >= n.exit.length) this.remove(n);
         }
       }
     }
   }
 
-  private moveNpc(n: Npc, d: THREE.Vector3, dist: number, speed: number, dt: number) {
-    const m = n.mesh!;
-    const legs = m.userData.legs as THREE.Object3D[];
-    if (dist > 0.08) {
-      d.normalize();
-      m.position.addScaledVector(d, Math.min(dist, speed * dt));
-      m.rotation.y = Math.atan2(d.x, d.z);
-      n.phase += dt * speed * 3;
-      legs[0].rotation.x = Math.sin(n.phase) * 0.7;
-      legs[1].rotation.x = -Math.sin(n.phase) * 0.7;
-    } else {
-      legs[0].rotation.x = legs[1].rotation.x = 0;
-      m.rotation.y = -Math.PI / 2; // face the counter
+  private moveTo(n: Npc, tx: number, tz: number, speed: number, dt: number, idleRot?: number): boolean {
+    const dx = tx - n.x, dz = tz - n.z;
+    const d = Math.hypot(dx, dz);
+    if (d < 0.08) {
+      if (idleRot !== undefined) n.rot = idleRot;
+      this.draw(n, 0);
+      return true;
     }
+    const step = Math.min(d, speed * dt);
+    n.x += (dx / d) * step;
+    n.z += (dz / d) * step;
+    n.rot = Math.atan2(dx, dz);
+    n.phase += dt * speed * 2.6;
+    this.draw(n, 0.6);
+    return false;
+  }
+
+  private draw(n: Npc, swing: number, scale = 1) {
+    if (n.slot < 0) return;
+    this.v.set(n.x, 0, n.z);
+    this.root.localToWorld(this.v);
+    const rot = n.rot + this.root.rotation.y;
+    const s = n.kind === CUSTOMER_KIND.normal ? scale : scale * 1.12;
+    this.crowd.pose(n.slot, this.v.x, 0, this.v.z, rot, n.phase, swing, s, 0, n.kind === CUSTOMER_KIND.golden ? Math.abs(Math.sin(n.phase)) * 0.04 : 0);
+  }
+
+  private remove(n: Npc) {
+    if (n.slot >= 0) { this.crowd.release(n.slot); this.visibleCount--; }
+    this.npcs.delete(n.id);
+    this.order = this.order.filter((x) => x !== n.id);
   }
 
   clear() {
-    for (const n of this.npcs.values()) if (n.mesh) this.root.remove(n.mesh);
-    this.npcs.clear();
+    for (const n of [...this.npcs.values()]) this.remove(n);
     this.order = [];
   }
 }

@@ -1,4 +1,4 @@
-import type { CosmeticId, StructureId, UpgradeId, WorkerId } from '../constants/config';
+import type { AchievementId, CosmeticId, StructureId, UpgradeId, VenueId, WorkerId } from '../constants/config';
 
 export type GameMode = 'vs' | 'coop' | 'solo';
 export type MatchStatus = 'lobby' | 'countdown' | 'playing' | 'ended';
@@ -11,10 +11,13 @@ export interface BusinessStats {
   income: number;
   upgrades: number;
   buildings: number;
+  /** Best income over a rolling 60 s window ($/min). */
+  peakIncome: number;
   spentBuilding: number;
   spentStructure: number;
   spentUpgrade: number;
   spentWorker: number;
+  spentVenue: number;
 }
 
 export interface BusinessState {
@@ -27,7 +30,11 @@ export interface BusinessState {
   tier: number; // 1..10
   upgrades: Record<UpgradeId, number>;
   workers: Record<WorkerId, number>;
+  /** Secondary businesses: 0 = not built, 1..3 = level. */
+  venues: Record<VenueId, number>;
   structures: StructureId[];
+  /** Server time until which production is boosted (Big Delivery reward). */
+  boostUntil: number;
   stats: BusinessStats;
   value: number;
 }
@@ -40,6 +47,8 @@ export interface BusinessTick {
   queue: number;
   value: number;
   customers: number;
+  /** Income over the last 60 s ($/min). */
+  ipm: number;
 }
 
 export interface PlayerPublic {
@@ -56,13 +65,16 @@ export interface PlayerPublic {
   graceUntil?: number; // server time when reconnect window ends
 }
 
-export type ActiveEventKind = 'rush' | 'boost' | 'golden' | 'delivery' | 'power';
+export type ActiveEventKind = 'rush' | 'boost' | 'festival' | 'vip' | 'delivery' | 'power';
 
 export interface ActiveEvent {
   kind: ActiveEventKind;
   startedAt: number;
   endsAt: number;
-  crates?: number[]; // delivery: remaining crate indices
+  /** delivery: remaining crate indices per business id. */
+  crates?: Record<number, number[]>;
+  /** vip: flat reward each VIP pays (same for everybody). */
+  reward?: number;
   switches?: number[]; // power: server time each switch was last pressed (0 = off)
 }
 
@@ -71,8 +83,8 @@ export interface MatchResult {
   reason: 'time' | 'goal' | 'forfeit' | 'disconnect' | 'dev';
   mode: GameMode;
   players: { id: string; name: string; value: number; businessId: number }[];
-  businesses: { id: number; value: number; customers: number; upgrades: number; buildings: number; income: number; tier: number }[];
-  rewards: Record<string, { coins: number; ratingDelta: number }>;
+  businesses: { id: number; value: number; customers: number; upgrades: number; buildings: number; income: number; tier: number; peakIncome: number; venues: number }[];
+  rewards: Record<string, { coins: number; ratingDelta: number; achievements: AchievementId[] }>;
 }
 
 export interface RoomSnapshot {

@@ -6,7 +6,7 @@ import {
 } from '../shared/game/economy';
 import { BusinessSim } from '../server/game/BusinessSim';
 
-const noop = { spawn() {}, served() {}, left() {}, delivery() {} };
+const noop = { spawn() {}, paid() {}, left() {}, delivery() {} };
 
 function run(minutes: number, manualPerSec: number, players: number, label: string) {
   let seq = 1;
@@ -21,7 +21,7 @@ function run(minutes: number, manualPerSec: number, players: number, label: stri
     sim.step(step, t, NO_MODS, noop);
     // Manual play: alternate produce/serve.
     if (Math.random() < (manualPerSec * players * step) / 1000) {
-      if (b.stock < 3) sim.manualProduce(NO_MODS); else sim.manualServe(NO_MODS, noop, 'a');
+      if (b.stock < 3) sim.manualProduce(NO_MODS); else sim.manualServe(NO_MODS, noop, t);
     }
     if (t % 1000 !== 0) continue;
     if (megaAt < 0 && megaMallMissing(b).length === 0) megaAt = t;

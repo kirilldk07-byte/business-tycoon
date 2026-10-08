@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { MATCH, RATING, REWARDS } from '../../shared/constants/config';
+import { MATCH, RATING, REWARDS, type AchievementId } from '../../shared/constants/config';
 import { S2C } from '../../shared/protocol/messages';
 import type { GameMode, MatchResult } from '../../shared/types/state';
 import type { ProfileStore, RoomStore } from '../persistence/storage';
@@ -22,8 +22,15 @@ export class RoomManager {
     private log: (m: string) => void,
   ) {}
 
+  /** Achievements unlocked during the current match, per player (shown on the result screen). */
+  private matchAchievements = new Map<string, AchievementId[]>();
+
   private hooks: RoomHooks = {
     onMatchEnd: (room, result) => this.applyResult(room, result),
+    achieve: (room, playerId, id) => {
+      const slot = room.players.get(playerId);
+      if (slot) this.grant(slot, id);
+    },
     log: (m) => this.log(m),
   };
 
@@ -33,7 +40,16 @@ export class RoomManager {
     let n = 0;
     this.timers.push(setInterval(() => {
       const now = Date.now();
-      for (const r of this.rooms.values()) r.step(now);
+      for (const r of [...this.rooms.values()]) {
+        try {
+          r.step(now);
+        } catch (e) {
+          // Isolate failures: one broken room must never take the server down.
+          this.log(`room ${r.code} crashed and was closed: ${(e as Error).stack}`);
+          for (const p of r.players.values()) { p.conn?.send({ t: S2C.ROOM_LEFT, reason: 'error' }); this.tokens.delete(p.token); }
+          this.rooms.delete(r.code);
+        }
+      }
       if (++n % (MATCH.serverTickHz * 5) === 0) this.cleanup(now);
       // Lobby: refresh pings/connection status every 2 s.
       if (n % (MATCH.serverTickHz * 2) === 0) {
@@ -117,6 +133,20 @@ export class RoomManager {
     }
   }
 
+  /** Persist an achievement once; notify the player. Returns true if newly granted. */
+  private grant(slot: PlayerSlot, id: AchievementId): boolean {
+    const prof = this.profiles.get(slot.profileId)?.profile;
+    if (!prof || prof.achievements.includes(id)) return false;
+    prof.achievements.push(id);
+    this.profiles.save(prof);
+    const list = this.matchAchievements.get(slot.id) ?? [];
+    list.push(id);
+    this.matchAchievements.set(slot.id, list);
+    slot.conn?.send({ t: S2C.ACHIEVEMENT, id });
+    slot.conn?.send({ t: S2C.PROFILE, profile: prof });
+    return true;
+  }
+
   // ---------- results → persistent profiles ----------
 
   private applyResult(room: Room, result: MatchResult) {
@@ -142,7 +172,7 @@ export class RoomManager {
       if (result.mode === 'vs') coins = won(s.id) ? REWARDS.win : REWARDS.loss;
       else coins = won(s.id) ? REWARDS.coopWin : REWARDS.coopLoss;
       const ratingDelta = deltas[s.id] ?? 0;
-      result.rewards[s.id] = { coins, ratingDelta };
+      result.rewards[s.id] = { coins, ratingDelta, achievements: [] };
       if (!prof) return;
       prof.gamesPlayed++;
       prof.coins += coins;
@@ -155,6 +185,11 @@ export class RoomManager {
         if (result.mode === 'coop') prof.wins++;
       }
       this.profiles.save(prof);
+      if (result.mode === 'vs' && won(s.id)) this.grant(s, 'winner');
+      if (result.mode === 'coop' && won(s.id)) this.grant(s, 'teamwork');
+      if (prof.wins >= 10) this.grant(s, 'tycoon');
+      result.rewards[s.id].achievements = this.matchAchievements.get(s.id) ?? [];
+      this.matchAchievements.delete(s.id);
       s.conn?.send({ t: S2C.PROFILE, profile: prof });
     });
   }

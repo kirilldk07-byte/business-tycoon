@@ -90,26 +90,32 @@ async function main() {
   await A.wait(S2C.ROOM_STATE, (m) => m.room.status === 'playing', 6000);
   ok(true, 'match playing after countdown');
 
-  // Anti-cheat: client cannot set money; buying without money fails
-  A.send({ t: C2S.BUILD_BUSINESS, kind: 'tier' });
-  await A.wait(S2C.ERROR, (m) => m.code === 'NOT_ENOUGH_MONEY');
-  ok(true, 'server rejects purchase without money ($100 < $400)');
-  A.send({ t: 'BUY_UPGRADE', id: 'price', money: 999999 } as never);
-  const up = await B.wait(S2C.BUSINESS_UPDATE, (m) => m.cause === 'upgrade:price');
-  ok(up.b.cash === 0 && up.b.upgrades.price === 1, 'A buys upgrade ($100); B sees it; injected money ignored');
+  // Anti-cheat: client cannot set money; locked/unaffordable purchases fail
+  A.send({ t: C2S.BUY_UPGRADE, id: 'price' });
+  await A.wait(S2C.ERROR, (m) => m.code === 'LOCKED');
+  ok(true, 'upgrades locked until the first business exists');
+  A.send({ t: C2S.BUILD_BUSINESS, kind: 'tier', money: 999999 } as never);
+  const up = await B.wait(S2C.BUSINESS_UPDATE, (m) => m.cause === 'tier');
+  ok(up.b.cash === 50 && up.b.tier === 1, 'A buys the kiosk ($50); B sees it; injected money ignored');
   A.send({ t: C2S.BUY_UPGRADE, id: 'price' });
   await A.wait(S2C.ERROR, (m) => m.code === 'NOT_ENOUGH_MONEY');
-  ok(true, 'second upgrade rejected (no cash)');
+  ok(true, 'upgrade rejected without enough cash ($50 < $100)');
   A.send({ t: 'BUY_UPGRADE', id: 'nonexistent' } as never);
   await A.wait(S2C.ERROR, (m) => m.code === 'BAD_MESSAGE');
   ok(true, 'unknown upgrade id rejected');
 
   // Building visible to the other device
-  A.send({ t: C2S.DEV, cmd: 'addMoney', arg: 1000 });
+  A.send({ t: C2S.DEV, cmd: 'addMoney', arg: 2000 });
   await A.wait(S2C.BUSINESS_UPDATE, (m) => m.cause === 'dev');
+  A.send({ t: C2S.BUILD_BUSINESS, kind: 'venue', id: 'restaurant' });
+  await A.wait(S2C.ERROR, (m) => m.code === 'LOCKED');
+  ok(true, 'venues unlock in order (Restaurant before Burger Shop → LOCKED)');
   A.send({ t: C2S.BUILD_BUSINESS, kind: 'tier' });
-  const tb = await B.wait(S2C.BUSINESS_UPDATE, (m) => m.cause === 'tier');
-  ok(tb.b.tier === 2, 'A builds tier 2, B sees the new building');
+  const tb = await B.wait(S2C.BUSINESS_UPDATE, (m) => m.cause === 'tier' && m.b.tier === 2);
+  ok(tb.b.tier === 2, 'A builds HQ tier 2, B sees the new building');
+  A.send({ t: C2S.BUILD_BUSINESS, kind: 'venue', id: 'burger' });
+  const vb = await B.wait(S2C.BUSINESS_UPDATE, (m) => m.cause === 'venue:burger');
+  ok(vb.b.venues.burger === 1, 'A opens the Burger Shop, B sees the second business');
 
   // Movement sync
   const bStart = jb.room.players.find((p) => p.id === B.playerId)!;
@@ -182,7 +188,7 @@ async function main() {
   const rc = await A.wait(S2C.MATCH_COUNTDOWN, (m) => m.startAt > Date.now());
   ok(rc.startAt > Date.now(), 'REMATCH by both → new countdown in same room');
   const st = await B2.wait(S2C.ROOM_STATE, (m) => m.room.status === 'countdown');
-  ok(st.room.businesses.every((b) => b.cash === 100 && b.tier === 1), 'rematch resets match state (money not carried over)');
+  ok(st.room.businesses.every((b) => b.cash === 100 && b.tier === 0 && b.venues.burger === 0), 'rematch resets match state (money/buildings not carried over)');
 
   // Forfeit: leaving during VS = defeat
   await A.wait(S2C.ROOM_STATE, (m) => m.room.status === 'playing', 6000);

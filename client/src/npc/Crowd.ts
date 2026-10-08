@@ -82,7 +82,7 @@ export class Crowd {
    * Pose a person. phase drives the walk cycle; swing 0 = standing.
    * armsUp (0..1) raises both arms (cheering / carrying).
    */
-  pose(i: number, x: number, y: number, z: number, rotY: number, phase: number, swing: number, scale = 1, armsUp = 0, bob = 0) {
+  pose(i: number, x: number, y: number, z: number, rotY: number, phase: number, swing: number, scale = 1, armsUp = 0, bob = 0, armL?: number, armR?: number) {
     if (i < 0) return;
     this.q.setFromEuler(this.e.set(0, rotY, 0));
     this.base.compose(this.v.set(x, y + bob, z), this.q, this.s.set(scale, scale, scale));
@@ -98,8 +98,8 @@ export class Crowd {
     set('hair', 0, 1.8, -0.02);
     set('legL', -0.12, 0.8, 0, leg);
     set('legR', 0.12, 0.8, 0, -leg);
-    set('armL', -0.33, 1.44, 0, armsUp ? -2.6 * armsUp : -leg * 0.9, 0.08);
-    set('armR', 0.33, 1.44, 0, armsUp ? -2.6 * armsUp : leg * 0.9, -0.08);
+    set('armL', -0.33, 1.44, 0, armL ?? (armsUp ? -2.6 * armsUp : -leg * 0.9), 0.08);
+    set('armR', 0.33, 1.44, 0, armR ?? (armsUp ? -2.6 * armsUp : leg * 0.9), -0.08);
     this.dirty = true;
   }
 

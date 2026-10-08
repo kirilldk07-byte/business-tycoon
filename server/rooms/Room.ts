@@ -1,11 +1,11 @@
 import {
-  COOP_GOAL, EVENTS, MATCH, PLAYER, STRUCTURES, TIERS, UPGRADES, WORKERS,
-  type CosmeticId, type StructureId, type UpgradeId, type WorkerId,
+  COOP_GOAL, EVENTS, GOLDEN, MATCH, PLAYER, STRUCTURES, TIERS, UPGRADES, VENUES, WORKERS, vipReward,
+  type AchievementId, type CosmeticId, type StructureId, type UpgradeId, type VenueId, type WorkerId,
 } from '../../shared/constants/config';
 import { PLOT_LOCAL, PLOTS, POWER_SWITCHES, WORLD_BOUNDS, plotToWorld } from '../../shared/constants/world';
-import { COOP_EVENTS, SOLO_EVENTS, VS_EVENTS } from '../../shared/events';
+import { COOP_EVENTS, CUSTOMER_KIND, EVENT_INFO, SOLO_EVENTS, VS_EVENTS } from '../../shared/events';
 import {
-  checkStructure, checkTier, checkUpgrade, checkWorker, computeRates, emptyBusiness, megaMallMissing, NO_MODS, type Modifiers,
+  checkStructure, checkTier, checkUpgrade, checkVenue, checkWorker, computeRates, emptyBusiness, megaMallMissing, NO_MODS, type Modifiers,
 } from '../../shared/game/economy';
 import { q2 } from '../../shared/protocol/codec';
 import {
@@ -46,6 +46,8 @@ export interface PlayerSlot {
 
 export interface RoomHooks {
   onMatchEnd(room: Room, result: MatchResult): void;
+  /** Persist an achievement for a player (no-op if already owned). */
+  achieve(room: Room, playerId: string, id: AchievementId): void;
   log(msg: string): void;
 }
 
@@ -69,6 +71,10 @@ export class Room {
   megaMallBuilt = false;
   lastActivity = Date.now();
   private customerSeq = 1;
+  private nextGoldenAt = 0;
+  /** Per-business customer events collected during a tick, flushed as one CUSTOMERS message. */
+  private batches = new Map<number, { sp: number[]; pd: number[]; lf: number[] }>();
+  private achieveTimer = 0;
   private lastStep = Date.now();
 
   constructor(
@@ -206,6 +212,8 @@ export class Room {
     this.startTime = this.countdownEndsAt;
     this.endTime = this.startTime + MATCH.durationMs[this.mode];
     this.nextEventAt = this.startTime + EVENTS.firstDelayMs;
+    this.nextGoldenAt = this.startTime + GOLDEN.firstMs;
+    this.batches.clear();
     this.serverTick = 0;
     this.customerSeq = 1;
     const ps = [...this.players.values()];
@@ -244,6 +252,13 @@ export class Room {
     const mods = this.mods();
     for (const sim of this.businesses) sim.step(dt, now, mods, this.emitter);
     this.updateEvents(now);
+    if (now >= this.nextGoldenAt) {
+      // Fair golden customer: every business gets one at the same moment.
+      this.nextGoldenAt = now + GOLDEN.minGapMs + Math.random() * (GOLDEN.maxGapMs - GOLDEN.minGapMs);
+      for (const sim of this.businesses) sim.spawnCustomer(now, CUSTOMER_KIND.golden, this.emitter);
+    }
+    this.flushCustomers();
+    if (++this.achieveTimer % MATCH.serverTickHz === 0) this.checkLiveAchievements();
     if (now >= this.endTime) this.finishByTime();
   }
 
@@ -281,6 +296,7 @@ export class Room {
       businesses: this.businesses.map(({ b }) => ({
         id: b.id, value: b.value, customers: b.stats.customers, upgrades: b.stats.upgrades,
         buildings: b.stats.buildings, income: Math.floor(b.stats.income), tier: b.tier,
+        peakIncome: b.stats.peakIncome, venues: Object.values(b.venues).filter((l) => l > 0).length,
       })),
       rewards: {},
     };
@@ -344,7 +360,7 @@ export class Room {
     return OK;
   }
 
-  build(p: PlayerSlot, kind: 'tier' | 'structure', id?: StructureId): Result {
+  build(p: PlayerSlot, kind: 'tier' | 'structure' | 'venue', id?: StructureId | VenueId): Result {
     const sim = this.actionBiz(p);
     if (!sim) return fail(ERR.NOT_PLAYING, 'Матч не идёт');
     if (kind === 'tier') {
@@ -355,15 +371,29 @@ export class Room {
       sim.b.stats.buildings++;
       this.bizUpdate(sim, 'tier', p.id);
       p.conn?.send({ t: S2C.TOAST, text: `🏗️ ${TIERS[sim.b.tier - 1].name}!`, kind: 'good' });
+      if (sim.b.tier === 1) for (const o of sim.b.ownerIds) this.hooks.achieve(this, o, 'first_business');
       return OK;
     }
-    const c = checkStructure(sim.b, id!);
+    if (kind === 'venue') {
+      const vid = id as VenueId;
+      const c = checkVenue(sim.b, vid);
+      if (!c.ok) return this.purchaseFail(c.code);
+      sim.spend(c.cost, 'spentVenue');
+      sim.b.venues[vid]++;
+      sim.b.stats.buildings++;
+      this.bizUpdate(sim, `venue:${vid}`, p.id);
+      const lvl = sim.b.venues[vid];
+      p.conn?.send({ t: S2C.TOAST, text: `${VENUES[vid].icon} ${VENUES[vid].name}${lvl > 1 ? ` → ур. ${lvl}` : ' открыт!'}`, kind: 'good' });
+      return OK;
+    }
+    const sid = id as StructureId;
+    const c = checkStructure(sim.b, sid);
     if (!c.ok) return this.purchaseFail(c.code);
     sim.spend(c.cost, 'spentStructure');
-    sim.b.structures.push(id!);
+    sim.b.structures.push(sid);
     sim.b.stats.buildings++;
-    this.bizUpdate(sim, `structure:${id}`, p.id);
-    p.conn?.send({ t: S2C.TOAST, text: `${STRUCTURES[id!].icon} ${STRUCTURES[id!].name} построен!`, kind: 'good' });
+    this.bizUpdate(sim, `structure:${sid}`, p.id);
+    p.conn?.send({ t: S2C.TOAST, text: `${STRUCTURES[sid].icon} ${STRUCTURES[sid].name} построен!`, kind: 'good' });
     return OK;
   }
 
@@ -394,32 +424,42 @@ export class Room {
       if (target.kind === 'counter') {
         if (now < p.cdServe) return OK;
         p.cdServe = now + 250;
-        if (!sim.manualServe(mods, this.emitter, p.id)) {
+        if (sim.b.tier < 1) return fail(ERR.LOCKED, 'Сначала купи киоск');
+        if (!sim.manualServe(mods, this.emitter, now)) {
           p.conn?.send({ t: S2C.TOAST, text: sim.b.stock < 1 ? 'Нет товара — произведи у машины!' : 'Нет клиентов в очереди', kind: 'info' });
         }
       } else {
         if (now < p.cdProduce) return OK;
         p.cdProduce = now + 300;
+        if (sim.b.tier < 1) return fail(ERR.LOCKED, 'Сначала купи киоск');
         sim.manualProduce(mods);
       }
       return OK;
     }
     const ev = this.event;
     if (target.kind === 'crate') {
-      if (ev?.kind !== 'delivery' || !ev.crates?.includes(target.index)) return fail(ERR.NOT_ALLOWED, 'Ящика нет');
-      const sim = this.businesses[0];
+      // Each player unloads crates at THEIR OWN business (VS: equal opportunity).
+      const sim = this.bizFor(p);
+      const mine = sim ? ev?.crates?.[sim.b.id] : undefined;
+      if (ev?.kind !== 'delivery' || !sim || !mine?.includes(target.index)) return fail(ERR.NOT_ALLOWED, 'Ящика нет');
       const loc = PLOT_LOCAL.crates[target.index];
       if (!loc || !this.near(p, plotToWorld(sim.b.plot, loc.lx, loc.lz))) return fail(ERR.TOO_FAR, 'Подойди ближе');
-      ev.crates = ev.crates.filter((c) => c !== target.index);
-      if (ev.crates.length === 0) {
+      ev.crates![sim.b.id] = mine.filter((c) => c !== target.index);
+      if (ev.crates![sim.b.id].length === 0) {
         const price = this.priceOf(sim);
+        const bonus = price * EVENTS.deliveryCashPerPrice;
         sim.b.stock += EVENTS.deliveryStock;
-        sim.b.cash += price * EVENTS.deliveryCashPerPrice;
-        sim.b.stats.income += price * EVENTS.deliveryCashPerPrice;
-        this.endEvent('success');
-      } else {
-        this.broadcast({ t: S2C.EVENT_STATE, event: ev });
+        sim.b.cash += bonus;
+        sim.b.stats.income += bonus;
+        sim.b.boostUntil = now + EVENTS.deliveryBoostMs;
+        this.bizUpdate(sim, 'delivery', p.id);
+        for (const o of sim.b.ownerIds) {
+          this.players.get(o)?.conn?.send({ t: S2C.TOAST, text: `📦 Разгружено! +$${bonus} и производство x${EVENTS.deliveryBoostMult}`, kind: 'good' });
+        }
+        // Event ends when every business has finished (or on timeout).
+        if (Object.values(ev.crates!).every((l) => l.length === 0)) { this.endEvent('success'); return OK; }
       }
+      this.broadcast({ t: S2C.EVENT_STATE, event: ev });
       return OK;
     }
     if (target.kind === 'switch') {
@@ -494,21 +534,24 @@ export class Room {
   private startEvent(kind: ActiveEventKind, now: number) {
     const ev: ActiveEvent = { kind, startedAt: now, endsAt: now + EVENTS.rushDurationMs };
     if (kind === 'boost') ev.endsAt = now + EVENTS.boostDurationMs;
-    if (kind === 'golden') {
-      ev.endsAt = now + 8_000;
-      // Fair: every business gets its golden customer at the same moment.
-      for (const sim of this.businesses) sim.spawnCustomer(now, true, this.emitter);
+    if (kind === 'festival') ev.endsAt = now + EVENTS.festivalDurationMs;
+    if (kind === 'vip') {
+      ev.endsAt = now + EVENTS.vipDurationMs;
+      ev.reward = vipReward(now - this.startTime);
+      // Same VIP, same reward, same moment for every business.
+      for (const sim of this.businesses) sim.spawnCustomer(now, CUSTOMER_KIND.vip, this.emitter, ev.reward);
     }
     if (kind === 'delivery') {
       ev.endsAt = now + EVENTS.deliveryDurationMs;
-      ev.crates = PLOT_LOCAL.crates.slice(0, EVENTS.deliveryCrates).map((_, i) => i);
+      ev.crates = {};
+      for (const sim of this.businesses) ev.crates[sim.b.id] = PLOT_LOCAL.crates.slice(0, EVENTS.deliveryCrates).map((_, i) => i);
     }
     if (kind === 'power') {
       ev.endsAt = now + EVENTS.powerMaxMs;
       ev.switches = POWER_SWITCHES.map(() => 0);
     }
     this.event = ev;
-    this.hooks.log(`room ${this.code}: event ${kind}`);
+    this.hooks.log(`room ${this.code}: event ${kind} (${EVENT_INFO[kind].title})`);
     this.broadcast({ t: S2C.EVENT_STATE, event: ev });
   }
 
@@ -524,7 +567,7 @@ export class Room {
     const ev = this.event;
     if (!ev) return NO_MODS;
     return {
-      customerMult: ev.kind === 'rush' ? (this.mode === 'vs' ? EVENTS.rushMultVs : EVENTS.rushMultCoop) : 1,
+      customerMult: ev.kind === 'rush' ? (this.mode === 'vs' ? EVENTS.rushMultVs : EVENTS.rushMultCoop) : ev.kind === 'festival' ? EVENTS.festivalMult : 1,
       productionMult: ev.kind === 'boost' ? EVENTS.boostMult : 1,
       halted: ev.kind === 'power',
     };
@@ -532,12 +575,36 @@ export class Room {
 
   // ---------- helpers ----------
 
+  private batch(b: number) {
+    let x = this.batches.get(b);
+    if (!x) { x = { sp: [], pd: [], lf: [] }; this.batches.set(b, x); }
+    return x;
+  }
+
   private emitter: SimEmitter = {
-    spawn: (b, id, g, arrive, side) => this.broadcast({ t: S2C.CUSTOMER_SPAWN, b, id, g, arrive, side }),
-    served: (b, id, amt, by) => this.broadcast({ t: S2C.CUSTOMER_SERVED, b, id, amt, by }),
-    left: (b, id) => this.broadcast({ t: S2C.CUSTOMER_LEFT, b, id }),
+    spawn: (b, id, dest, kind, arrive, side) => { this.batch(b).sp.push(id, dest, kind, arrive, side); },
+    paid: (b, id, amt) => { this.batch(b).pd.push(id, Math.round(amt)); },
+    left: (b, id) => { this.batch(b).lf.push(id); },
     delivery: (b, amt) => this.broadcast({ t: S2C.DELIVERY_SALE, b, amt }),
   };
+
+  /** One message per business per tick instead of one per customer. */
+  private flushCustomers() {
+    for (const [b, x] of this.batches) {
+      if (!x.sp.length && !x.pd.length && !x.lf.length) continue;
+      this.broadcast({ t: S2C.CUSTOMERS, b, sp: x.sp.length ? x.sp : undefined, pd: x.pd.length ? x.pd : undefined, lf: x.lf.length ? x.lf : undefined });
+      x.sp = []; x.pd = []; x.lf = [];
+    }
+  }
+
+  private checkLiveAchievements() {
+    for (const sim of this.businesses) {
+      for (const o of sim.b.ownerIds) {
+        if (sim.b.stats.income >= 100_000) this.hooks.achieve(this, o, 'entrepreneur');
+        if (sim.b.value >= 1_000_000) this.hooks.achieve(this, o, 'millionaire');
+      }
+    }
+  }
 
   private priceOf(sim: BusinessSim) {
     return computeRates(sim.b).price;
@@ -603,7 +670,8 @@ export class Room {
   }
 
   economySnapshot(): ServerMsg {
-    return { t: S2C.ECONOMY, s: Date.now(), b: this.businesses.map((s) => s.tick()) };
+    const now = Date.now();
+    return { t: S2C.ECONOMY, s: now, b: this.businesses.map((s) => s.tick(now)) };
   }
 
   broadcast(msg: ServerMsg) {
@@ -634,7 +702,17 @@ export class Room {
       status: data.status, countdownEndsAt: data.countdownEndsAt, startTime: data.startTime, endTime: data.endTime,
       serverTick: data.serverTick, nextEventAt: data.nextEventAt, result: data.result, megaMallBuilt: data.megaMallBuilt,
     });
-    r.businesses = data.businesses.map((b) => {
+    r.businesses = data.businesses.map((saved) => {
+      // Schema migration: fill fields added in newer versions with defaults.
+      const fresh = emptyBusiness(saved.id, saved.plot, saved.ownerIds, 0);
+      const b: BusinessState = {
+        ...fresh, ...saved,
+        upgrades: { ...fresh.upgrades, ...saved.upgrades },
+        workers: { ...fresh.workers, ...saved.workers },
+        venues: { ...fresh.venues, ...(saved.venues ?? {}) },
+        stats: { ...fresh.stats, ...saved.stats },
+        boostUntil: saved.boostUntil ?? 0,
+      };
       const sim = new BusinessSim(b, () => r.customerSeq++);
       sim.resetCustomers();
       return sim;

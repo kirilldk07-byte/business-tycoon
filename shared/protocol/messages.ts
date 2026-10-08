@@ -1,7 +1,7 @@
 // Centralized, typed network protocol. Every message has a numeric-free string
 // tag `t` taken ONLY from these enums — no ad-hoc strings anywhere else.
 
-import type { CosmeticId, StructureId, UpgradeId, WorkerId } from '../constants/config';
+import type { AchievementId, CosmeticId, StructureId, UpgradeId, VenueId, WorkerId } from '../constants/config';
 import type {
   ActiveEvent, BusinessState, BusinessTick, GameMode, MatchResult, RoomSnapshot,
 } from '../types/state';
@@ -48,9 +48,9 @@ export const S2C = {
   SNAPSHOT: 'SNAPSHOT',
   ECONOMY: 'ECONOMY',
   BUSINESS_UPDATE: 'BUSINESS_UPDATE',
-  CUSTOMER_SPAWN: 'CUSTOMER_SPAWN',
-  CUSTOMER_SERVED: 'CUSTOMER_SERVED',
-  CUSTOMER_LEFT: 'CUSTOMER_LEFT',
+  /** Batched customer events for one business, one message per server tick. */
+  CUSTOMERS: 'CUSTOMERS',
+  ACHIEVEMENT: 'ACHIEVEMENT',
   DELIVERY_SALE: 'DELIVERY_SALE',
   EVENT_STATE: 'EVENT_STATE',
   EMOTE: 'EMOTE',
@@ -88,7 +88,7 @@ export const EMOTE_COOLDOWN_MS = 1500;
 /** Compact movement tuple: x, y, z, rotY, anim */
 export type MoveTuple = [number, number, number, number, number];
 
-export type BuildKind = 'tier' | 'structure';
+export type BuildKind = 'tier' | 'structure' | 'venue';
 export type InteractTarget =
   | { kind: 'counter'; biz: number }
   | { kind: 'machine'; biz: number }
@@ -109,6 +109,7 @@ export interface PlayerProfile {
   hats: CosmeticId[];
   hat: CosmeticId;
   gamesPlayed: number;
+  achievements: AchievementId[];
 }
 
 export type ClientMsg =
@@ -125,7 +126,7 @@ export type ClientMsg =
   | { t: typeof C2S.START_MATCH }
   | { t: typeof C2S.PLAYER_MOVE; p: MoveTuple; seq: number }
   | { t: typeof C2S.BUY_UPGRADE; id: UpgradeId }
-  | { t: typeof C2S.BUILD_BUSINESS; kind: BuildKind; id?: StructureId }
+  | { t: typeof C2S.BUILD_BUSINESS; kind: BuildKind; id?: StructureId | VenueId }
   | { t: typeof C2S.HIRE_WORKER; id: WorkerId }
   | { t: typeof C2S.INTERACT; target: InteractTarget }
   | { t: typeof C2S.BUILD_MEGA_MALL }
@@ -151,9 +152,12 @@ export type ServerMsg =
   | { t: typeof S2C.SNAPSHOT; s: number; tick: number; p: [string, number, number, number, number, number][] }
   | { t: typeof S2C.ECONOMY; s: number; b: BusinessTick[] }
   | { t: typeof S2C.BUSINESS_UPDATE; b: BusinessState; cause: string; by?: string }
-  | { t: typeof S2C.CUSTOMER_SPAWN; b: number; id: number; g: boolean; arrive: number; side: number }
-  | { t: typeof S2C.CUSTOMER_SERVED; b: number; id: number; amt: number; by?: string }
-  | { t: typeof S2C.CUSTOMER_LEFT; b: number; id: number }
+  /**
+   * sp: spawns, flat groups of 5 → [id, dest (-1 counter | venue idx), kind (0 normal, 1 golden, 2 vip), arrive (server ms), side]
+   * pd: paid, flat pairs → [id, amount]      lf: left without paying → [id]
+   */
+  | { t: typeof S2C.CUSTOMERS; b: number; sp?: number[]; pd?: number[]; lf?: number[] }
+  | { t: typeof S2C.ACHIEVEMENT; id: AchievementId }
   | { t: typeof S2C.DELIVERY_SALE; b: number; amt: number }
   | { t: typeof S2C.EVENT_STATE; event: ActiveEvent | null; outcome?: 'success' | 'fail' | 'expired' }
   | { t: typeof S2C.EMOTE; id: string; e: number }

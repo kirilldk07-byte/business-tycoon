@@ -1,329 +1,432 @@
 import * as THREE from 'three';
-import type { StructureId, WorkerId } from '../../../shared/constants/config';
-import { box, carMesh, cyl, facadeTexture, mat, pedestrianMesh } from '../world/World';
+import { VENUES, type StructureId, type VenueId } from '../../../shared/constants/config';
+import { GeoBuilder, PAL, makeSign } from '../world/geo';
 
-// Procedural low-poly buildings. Local frame: +X faces the plaza (front).
+// Procedural low-poly buildings, baked into merged vertex-colored meshes.
+// Local frame: +X faces the park (front) unless stated otherwise.
 
-export function signMesh(text: string, w: number, h: number, bg = '#111827', fg = '#fde047'): THREE.Mesh {
-  const c = document.createElement('canvas');
-  c.width = 512; c.height = Math.round((512 * h) / w);
-  const g = c.getContext('2d')!;
-  g.fillStyle = bg; g.fillRect(0, 0, c.width, c.height);
-  g.strokeStyle = fg; g.lineWidth = 10; g.strokeRect(8, 8, c.width - 16, c.height - 16);
-  g.fillStyle = fg;
-  g.textAlign = 'center'; g.textBaseline = 'middle';
-  let size = c.height * 0.55;
-  g.font = `900 ${size}px system-ui, sans-serif`;
-  while (g.measureText(text).width > c.width * 0.88 && size > 10) { size -= 2; g.font = `900 ${size}px system-ui, sans-serif`; }
-  g.fillText(text, c.width / 2, c.height / 2 + 2);
-  const t = new THREE.CanvasTexture(c);
-  t.colorSpace = THREE.SRGBColorSpace;
-  const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshStandardMaterial({ map: t, emissive: 0xffffff, emissiveMap: t, emissiveIntensity: 0.25 }));
-  return m;
-}
+const shade = (c: number, l: number) => new THREE.Color(c).offsetHSL(0, 0, l).getHex();
 
-/** A sign facing +X placed at (x, y, z). */
-function frontSign(g: THREE.Group, text: string, x: number, y: number, z: number, w: number, h: number, bg?: string, fg?: string) {
-  const s = signMesh(text, w, h, bg, fg);
-  s.position.set(x + 0.02, y, z);
-  s.rotation.y = Math.PI / 2;
+function withSign(g: THREE.Group, text: string, w: number, h: number, x: number, y: number, z: number, bg: string, fg: string, ry = 0) {
+  const s = makeSign(text, w, h, bg, fg);
+  s.position.set(x, y, z);
+  s.rotation.y = Math.PI / 2 + ry;
   g.add(s);
+  return s;
 }
 
-function facadeBox(w: number, h: number, d: number, base: string, floors: number, x = 0, y = 0, z = 0, roof = 0x9ca3af) {
-  const tex = facadeTexture(base, '#a5d8ff', Math.max(2, Math.round(d / 2)), floors);
-  const side = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.7 });
-  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), [side, side, mat(roof), mat(roof), side, side]);
-  m.position.set(x, y + h / 2, z);
-  m.castShadow = true; m.receiveShadow = true;
-  return m;
-}
-
-function awning(g: THREE.Group, x: number, y: number, z: number, width: number, a: number, b: number) {
-  const n = Math.max(3, Math.round(width / 0.6));
+function awning(b: GeoBuilder, x: number, y: number, z: number, width: number, a: number, c: number, axis: 'z' | 'x' = 'z') {
+  const n = Math.max(3, Math.round(width / 0.7));
   for (let i = 0; i < n; i++) {
-    const s = box(1.2, 0.12, width / n, i % 2 ? a : b, x, y, z - width / 2 + (i + 0.5) * (width / n));
-    s.rotation.z = -0.35;
-    g.add(s);
+    const off = -width / 2 + (i + 0.5) * (width / n);
+    if (axis === 'z') b.boxC(1.3, 0.12, width / n, i % 2 ? a : c, x, y, z + off, { rz: -0.38 });
+    else b.boxC(width / n, 0.12, 1.3, i % 2 ? a : c, x + off, y, z, { rx: 0.38 });
   }
 }
 
-function glassFront(g: THREE.Group, x: number, y: number, z: number, w: number, h: number) {
-  const glass = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshStandardMaterial({ color: 0x9fd8ff, metalness: 0.3, roughness: 0.1, transparent: true, opacity: 0.85 }));
-  glass.position.set(x + 0.03, y + h / 2, z);
-  glass.rotation.y = Math.PI / 2;
-  g.add(glass);
+/** Glass front on the +X face. */
+function glassFront(b: GeoBuilder, x: number, y: number, w: number, h: number, z = 0) {
+  b.glassBox(0.12, h, w, PAL.glass, x, y, z);
+  b.box(0.16, 0.18, w + 0.2, 0xf8fafc, x, y + h, z);
 }
 
-function door(g: THREE.Group, x: number, z: number) {
-  const d = box(0.1, 2.1, 1.4, 0x7c4a1e, x + 0.05, 0, z);
-  g.add(d);
+function windowRows(b: GeoBuilder, faceX: number, depth: number, floors: number, y0: number, floorH: number, color = 0x9fd3ff) {
+  const cols = Math.max(2, Math.floor(depth / 1.9));
+  for (let f = 0; f < floors; f++) for (let c = 0; c < cols; c++) {
+    const z = -depth / 2 + (c + 0.5) * (depth / cols);
+    b.box(0.1, floorH * 0.5, depth / cols * 0.6, (c + f) % 5 === 0 ? 0xffe9a8 : color, faceX, y0 + f * floorH + floorH * 0.25, z);
+  }
 }
 
-export const TIER_SIZE = [3, 5, 7, 9, 10, 12, 13, 9, 8, 9];
+/** Visual footprint per HQ tier (index = tier-1). */
+export const TIER_SIZE = [3.6, 5.2, 7, 9, 10, 12, 13, 12, 12, 13];
+export const TIER_HEIGHT = [3.4, 4.2, 6.2, 7.5, 7, 8.5, 12, 22, 34, 48];
 
 export function createTierBuilding(tier: number, accent: number): THREE.Group {
+  const b = new GeoBuilder();
   const g = new THREE.Group();
   const acc = '#' + accent.toString(16).padStart(6, '0');
   switch (tier) {
-    case 1: { // Lemonade kiosk
-      g.add(box(3, 2.2, 3, 0xfff7d6));
-      g.add(box(3.3, 0.25, 3.3, accent, 0, 2.2));
-      awning(g, 1.9, 2.0, 0, 3.2, 0xfacc15, 0xffffff);
-      const lemon = new THREE.Mesh(new THREE.SphereGeometry(0.55, 12, 10), mat(0xfde047));
-      lemon.scale.set(1.25, 1, 1); lemon.position.set(0, 3.1, 0);
-      g.add(lemon);
-      frontSign(g, 'LEMONADE', 1.51, 1.75, 0, 2.6, 0.5, '#fde047', '#111827');
+    case 1: { // Coffee / lemonade stand
+      b.box(3.4, 0.2, 3.4, 0x9ca3af);
+      b.box(3, 2.1, 2.6, 0xfff3d6, 0, 0.2);
+      b.box(3.1, 0.25, 2.7, accent, 0, 2.3);
+      b.box(0.2, 1.0, 2.4, 0xb7793f, 1.55, 0.2); // counter front
+      awning(b, 1.9, 2.25, 0, 3.0, 0xfacc15, 0xffffff);
+      b.cyl(0.55, 0.9, 0xffffff, 0, 2.55, 0, 12);
+      b.cyl(0.5, 0.06, 0x6b3e26, 0, 3.42, 0, 12);
+      b.box(0.1, 0.9, 0.7, 0x111827, 1.7, 0.2, 1.1); // menu board
+      withSign(g, 'COFFEE', 2.4, 0.5, 1.56, 1.85, 0, '#fde047', '#3b2416');
       break;
     }
     case 2: { // Coffee shop
-      g.add(box(5, 3, 4, 0xe9d5b7));
-      g.add(box(5.4, 0.3, 4.4, 0x6b3e26, 0, 3));
-      glassFront(g, 2.5, 0.4, 0, 3, 1.8);
-      awning(g, 3.0, 2.7, 0, 4, 0x6b3e26, 0xfef3c7);
-      const cup = cyl(0.6, 0.45, 0.9, 0xffffff, 12, 0, 3.3);
-      g.add(cup);
-      g.add(cyl(0.55, 0.55, 0.05, 0x4b2e1e, 12, 0, 4.18));
-      frontSign(g, 'COFFEE', 2.52, 2.35, 0, 3, 0.55, '#3b2416', '#fde68a');
+      b.box(5.2, 0.2, 4.6, 0x9ca3af);
+      b.box(5, 3.2, 4.2, 0xe9cfae, 0, 0.2);
+      b.box(5.3, 0.35, 4.5, 0x6b3e26, 0, 3.4);
+      glassFront(b, 2.52, 0.6, 3, 1.8);
+      awning(b, 3.1, 2.95, 0, 4.2, 0x6b3e26, 0xfef3c7);
+      b.cyl(0.65, 1, 0xffffff, -0.6, 3.75, 0, 12);
+      b.cyl(0.6, 0.06, 0x4b2e1e, -0.6, 4.72, 0, 12);
+      for (const z of [-1.4, 1.4]) { b.cyl(0.35, 0.05, 0xffffff, 3.6, 0.75, z, 8); b.cyl(0.05, 0.75, PAL.metal, 3.6, 0, z, 6); }
+      withSign(g, '☕ COFFEE SHOP', 3.6, 0.6, 2.62, 2.55, 0, '#3b2416', '#fde68a');
       break;
     }
     case 3: { // Cafe
-      g.add(facadeBox(7, 5, 6, '#fde2c8', 2));
-      g.add(box(7.4, 0.35, 6.4, accent, 0, 5));
-      glassFront(g, 3.5, 0.3, -1.2, 3, 2);
-      door(g, 3.5, 1.6);
-      awning(g, 4.0, 2.8, 0, 6, accent, 0xffffff);
-      frontSign(g, 'CAFÉ', 3.52, 4.2, 0, 4, 0.8, acc, '#ffffff');
+      b.box(7, 0.2, 6.2, 0x9ca3af);
+      b.box(7, 5.6, 6, 0xfde2c8, 0, 0.2);
+      b.box(7.3, 0.35, 6.3, accent, 0, 5.8);
+      glassFront(b, 3.52, 0.5, 3.4, 2.2, -1.2);
+      b.box(0.12, 2.3, 1.2, 0x7c4a1e, 3.52, 0.2, 1.8);
+      windowRows(b, 3.52, 6, 1, 3.4, 2.4);
+      awning(b, 4.1, 3.0, 0, 6, accent, 0xffffff);
+      for (let i = -2; i <= 2; i++) b.box(0.1, 0.8, 0.1, 0xffffff, 3.3, 6.15, i * 1.4);
+      b.box(0.1, 0.1, 5.8, 0xffffff, 3.3, 6.9, 0);
+      withSign(g, '🍔 CAFÉ', 4.2, 0.9, 3.54, 4.9, 0, acc, '#ffffff');
       break;
     }
     case 4: { // Restaurant
-      g.add(facadeBox(9, 6.5, 7, '#f4c7a1', 2, 0, 0, 0, 0x7f1d1d));
-      g.add(box(9.6, 0.5, 7.6, 0x7f1d1d, 0, 6.5));
-      g.add(box(1, 2, 1, 0x57534e, -3, 7, 2.2));
-      glassFront(g, 4.5, 0.3, -2, 3.4, 2.2);
-      door(g, 4.5, 1.8);
-      awning(g, 5.0, 2.9, 0, 7, 0x991b1b, 0xffffff);
-      frontSign(g, 'RESTAURANT', 4.52, 5.4, 0, 6, 1, '#7f1d1d', '#fde68a');
+      b.box(9, 0.2, 7.4, 0x9ca3af);
+      b.box(9, 6.6, 7.2, 0xf4c7a1, 0, 0.2);
+      b.gable(9.6, 2.4, 7.8, 0x991b1b, 0, 6.8, 0);
+      b.box(1, 2.4, 1, 0x57534e, -2.5, 7.2, 2.3);
+      glassFront(b, 4.52, 0.5, 3.6, 2.3, -1.8);
+      b.box(0.12, 2.4, 1.4, 0x7c4a1e, 4.52, 0.2, 1.9);
+      windowRows(b, 4.52, 7.2, 1, 3.6, 2.6);
+      awning(b, 5.1, 3.0, 0, 7.2, 0x991b1b, 0xffffff);
+      for (let i = 0; i < 8; i++) b.ball(0.12, [0xfde047, 0xf472b6, 0x60a5fa][i % 3], 5.6, 3.4 - Math.sin(i / 7 * Math.PI) * 0.4, -3.4 + i);
+      withSign(g, '🍽 RESTAURANT', 6, 1, 4.6, 5.6, 0, '#7f1d1d', '#fde68a');
       break;
     }
     case 5: { // Shop
-      g.add(facadeBox(10, 6, 8, '#dbeafe', 2, 0, 0, 0, 0x1e3a8a));
-      glassFront(g, 5, 0.2, 0, 8, 3);
-      g.add(box(10.4, 1.2, 8.4, accent, 0, 6));
-      frontSign(g, 'SHOP', 5.22, 6.6, 0, 6, 1.1, acc, '#ffffff');
+      b.box(10.2, 0.2, 8.4, 0x9ca3af);
+      b.box(10, 6.2, 8, 0xdbeafe, 0, 0.2);
+      glassFront(b, 5.02, 0.4, 7.4, 3.2);
+      b.box(10.4, 1.3, 8.4, accent, 0, 6.4);
+      b.box(1.8, 1, 1.4, 0xcbd5e1, -2.5, 7.7, 2);
+      b.box(1.8, 1, 1.4, 0xcbd5e1, -2.5, 7.7, -2);
+      windowRows(b, 5.02, 8, 1, 3.8, 2.4);
+      withSign(g, '🏪 SHOP', 6, 1.1, 5.22, 7.05, 0, acc, '#ffffff');
       break;
     }
     case 6: { // Supermarket
-      g.add(facadeBox(12, 7, 12, '#ecfccb', 2, 0, 0, 0, 0x365314));
-      glassFront(g, 6, 0.2, 0, 10, 3.2);
-      g.add(box(12.5, 1.6, 12.5, 0x16a34a, 0, 7));
-      frontSign(g, 'SUPERMARKET', 6.27, 7.8, 0, 9, 1.4, '#15803d', '#ffffff');
-      for (let i = 0; i < 3; i++) g.add(box(0.8, 0.8, 0.5, 0x94a3b8, 7.2, 0, -4 + i * 0.7));
+      b.box(12.4, 0.2, 11.4, 0x9ca3af);
+      b.box(12, 7.4, 11, 0xecfccb, 0, 0.2);
+      glassFront(b, 6.02, 0.4, 9, 3.4);
+      b.box(2.4, 0.3, 4.5, 0x16a34a, 7.1, 3.6, 0);
+      b.cyl(0.1, 3.5, PAL.metal, 8.1, 0.2, -2, 6);
+      b.cyl(0.1, 3.5, PAL.metal, 8.1, 0.2, 2, 6);
+      b.box(12.4, 1.6, 11.4, 0x16a34a, 0, 7.6);
+      for (let i = 0; i < 4; i++) b.box(0.8, 0.8, 0.5, 0x94a3b8, 7.6, 0.2, -4.8 + i * 0.65);
+      withSign(g, '🛒 SUPERMARKET', 9, 1.4, 6.27, 8.4, 0, '#15803d', '#ffffff');
       break;
     }
     case 7: { // Mall
-      g.add(facadeBox(13, 9, 12, '#f5f3ff', 3, 0, 0, 0, 0x6d28d9));
-      glassFront(g, 6.5, 0.2, 0, 11, 8.5);
-      const dome = new THREE.Mesh(new THREE.SphereGeometry(4, 18, 10, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0xa5f3fc, metalness: 0.4, roughness: 0.1, transparent: true, opacity: 0.8 }));
-      dome.position.y = 9;
-      g.add(dome);
-      frontSign(g, 'MALL', 6.52, 9.6, 0, 7, 1.3, '#6d28d9', '#ffffff');
+      b.box(13.4, 0.2, 12.4, 0x9ca3af);
+      b.box(13, 10.5, 12, 0xf5f3ff, 0, 0.2);
+      glassFront(b, 6.52, 0.4, 11, 9.4);
+      for (let f = 1; f < 3; f++) b.box(0.3, 0.2, 12, 0xffffff, 6.6, f * 3.4, 0);
+      b.ball(4.2, 0x99e5f5, 0, 10.7, 0, true);
+      b.box(9, 0.6, 9, 0xf5f3ff, 0, 10.6);
+      withSign(g, '🏬 MALL', 7, 1.4, 6.62, 11.2, 0, '#6d28d9', '#ffffff');
       break;
     }
-    case 8: { // Corporation
-      g.add(facadeBox(12, 4, 12, '#e5e7eb', 1, 0, 0, 0, 0x374151));
-      g.add(facadeBox(9, 16, 9, '#93c5fd', 8, 0, 4, 0, 0x1e40af));
-      frontSign(g, 'CORP', 4.52, 17, 0, 6, 1.6, '#1e3a8a', '#ffffff');
-      g.add(box(1.4, 2.4, 1.4, 0x1e3a8a, 2.5, 20, 2.5));
+    case 8: { // Business center
+      b.box(12.4, 0.2, 12.4, 0x9ca3af);
+      b.box(12, 4.2, 12, 0xe5e7eb, 0, 0.2);
+      glassFront(b, 6.02, 0.4, 9, 3.2);
+      b.box(9, 17, 9, 0x93c5fd, 0, 4.4);
+      for (let f = 0; f < 6; f++) b.box(9.15, 0.35, 9.15, 0xf8fafc, 0, 6 + f * 2.7);
+      b.box(4, 2, 4, 0x1e3a8a, 0, 21.4);
+      withSign(g, '🏢 BUSINESS CENTER', 7.6, 1.3, 4.6, 19, 0, '#1e3a8a', '#ffffff');
       break;
     }
     case 9: { // Skyscraper
-      g.add(facadeBox(12, 3, 12, '#e5e7eb', 1));
-      g.add(facadeBox(8, 14, 8, '#7dd3fc', 7, 0, 3));
-      g.add(facadeBox(6.5, 10, 6.5, '#7dd3fc', 5, 0, 17));
-      g.add(facadeBox(5, 6, 5, '#7dd3fc', 3, 0, 27));
-      g.add(cyl(0.12, 0.2, 6, 0xd1d5db, 6, 0, 33));
-      frontSign(g, 'TOWER', 4.02, 15.5, 0, 6, 1.4, '#0c4a6e', '#ffffff');
+      b.box(12.4, 0.2, 12.4, 0x9ca3af);
+      b.box(12, 3.2, 12, 0xe5e7eb, 0, 0.2);
+      b.box(8.4, 14, 8.4, 0x7dd3fc, 0, 3.4);
+      b.box(7, 10, 7, 0x7dd3fc, 0, 17.4);
+      b.box(5.4, 6, 5.4, 0x7dd3fc, 0, 27.4);
+      for (let f = 0; f < 10; f++) { const w = f < 5 ? 8.55 : f < 8 ? 7.15 : 5.55; b.box(w, 0.3, w, 0xf8fafc, 0, 5 + f * 2.8); }
+      b.cyl(0.15, 7, 0xe5e7eb, 0, 33.4, 0, 6);
+      b.ball(0.35, 0xef4444, 0, 40.5, 0);
+      withSign(g, '🌆 TOWER', 6, 1.4, 4.25, 15.5, 0, '#0c4a6e', '#ffffff');
       break;
     }
     default: { // 10: BUSINESS EMPIRE
-      g.add(facadeBox(13, 4, 13, '#fef3c7', 1, 0, 0, 0, 0x78350f));
-      g.add(facadeBox(9, 20, 9, '#fde68a', 10, 0, 4, 0, 0xca8a04));
-      g.add(facadeBox(7, 14, 7, '#fcd34d', 7, 0, 24, 0, 0xca8a04));
-      const gold = mat(0xfacc15, { metalness: 0.8, roughness: 0.25, emissive: 0x6b4f00 });
-      const top = new THREE.Mesh(new THREE.ConeGeometry(4.5, 8, 4), gold);
-      top.rotation.y = Math.PI / 4; top.position.y = 42; top.castShadow = true;
-      g.add(top);
-      const orb = new THREE.Mesh(new THREE.OctahedronGeometry(1.2), gold);
-      orb.position.y = 47.5; orb.name = 'spin';
+      const gold = 0xfacc15, goldD = 0xca8a04;
+      b.box(13.4, 0.3, 13.4, goldD);
+      b.box(13, 4.4, 13, 0xfef3c7, 0, 0.3);
+      glassFront(b, 6.52, 0.6, 10, 3.4);
+      b.box(9.4, 20, 9.4, 0xfde68a, 0, 4.7);
+      b.box(7.4, 14, 7.4, 0xfcd34d, 0, 24.7);
+      for (let f = 0; f < 11; f++) { const w = f < 7 ? 9.6 : 7.6; b.box(w, 0.35, w, gold, 0, 7 + f * 2.9); }
+      b.cone(5, 8, gold, 0, 38.7, 0, 4);
+      b.cyl(3, 0.3, 0xffffff, 0, 46.8, 0, 12);
+      withSign(g, '👑 EMPIRE', 7, 1.8, 4.75, 21, 0, '#78350f', '#fde047');
+      const orb = new THREE.Mesh(new THREE.OctahedronGeometry(1.3), new THREE.MeshStandardMaterial({ color: gold, metalness: 0.8, roughness: 0.25, emissive: 0x6b4f00 }));
+      orb.position.y = 48.6; orb.name = 'spin';
       g.add(orb);
-      frontSign(g, 'EMPIRE', 4.52, 21, 0, 7, 1.8, '#78350f', '#fde047');
       break;
     }
   }
+  g.add(b.build(true));
   return g;
 }
 
+/** Venue buildings: door faces +Z. Level 1..3 grows height/details. */
+export function createVenue(id: VenueId, level: number): THREE.Group {
+  const b = new GeoBuilder();
+  const g = new THREE.Group();
+  const d = VENUES[id];
+  const col = d.color;
+  const L = Math.max(1, level);
+  const signBg = '#' + col.toString(16).padStart(6, '0');
+  const frontSign = (text: string, w: number, h: number, y: number, z: number) => {
+    const s = makeSign(text, w, h, signBg, '#ffffff');
+    s.rotation.y = 0; // facing +Z
+    s.position.set(0, y, z);
+    g.add(s);
+  };
+  const glassZ = (z: number, y: number, w: number, h: number) => { b.add(new THREE.BoxGeometry(1, 1, 1), PAL.glass, w, h, 0.12, { y: y + h / 2, z }, true); };
+  switch (id) {
+    case 'burger': {
+      const h = 3.6 + (L - 1) * 2.4;
+      b.box(8, 0.2, 7, 0x9ca3af);
+      b.box(7.6, h, 6.6, 0xfef2f2, 0, 0.2);
+      b.box(7.8, 0.6, 6.8, col, 0, h + 0.2);
+      glassZ(3.32, 0.6, 5, 2);
+      for (let i = 0; i < 8; i++) b.boxC(7.6 / 8, 0.12, 1.3, i % 2 ? col : 0xffffff, -3.8 + (i + 0.5) * 0.95, 3, 3.9, { rx: 0.38 });
+      // giant burger on the roof
+      const ry = h + 0.8;
+      b.cyl(1.4, 0.5, 0xd97706, 0, ry, 0, 12); b.cyl(1.5, 0.3, 0x7c2d12, 0, ry + 0.5, 0, 12);
+      b.cyl(1.55, 0.12, 0x22c55e, 0, ry + 0.8, 0, 12); b.add(new THREE.SphereGeometry(1, 12, 6, 0, Math.PI * 2, 0, Math.PI / 2), 0xf59e0b, 1.4, 0.9, 1.4, { y: ry + 0.92 });
+      if (L >= 2) windowRows2(b, 3.32, 7.6, L - 1, 3.6, 2.4);
+      if (L >= 3) b.box(7.9, 0.3, 6.9, 0xfacc15, 0, h + 0.8);
+      frontSign('🍔 BURGERS', 4.4, 0.8, 2.55, 3.35);
+      break;
+    }
+    case 'restaurant': {
+      const h = 5.4 + (L - 1) * 2.6;
+      b.box(9, 0.2, 8, 0x9ca3af);
+      b.box(8.6, h, 7.4, 0xede9fe, 0, 0.2);
+      b.gable(9.2, 2.2, 8, 0x5b21b6, 0, h + 0.2, 0, Math.PI / 2);
+      glassZ(3.72, 0.6, 3.4, 2.2);
+      windowRows2(b, 3.72, 8.6, 1 + (L - 1), 3.2, 2.6);
+      for (const x of [-3, 3]) { b.cyl(0.05, 2.2, 0xe5e7eb, x, 0.2, 5, 6); b.cone(1.3, 0.6, col, x, 2.4, 5, 8); b.cyl(0.5, 0.05, 0xffffff, x, 0.95, 5, 8); }
+      if (L >= 3) for (let i = 0; i < 9; i++) b.ball(0.13, [0xfde047, 0xf472b6, 0x60a5fa][i % 3], -4 + i, h - 0.4, 3.85);
+      frontSign('🍝 RESTAURANT', 5.4, 0.9, h - 1.2 + 0.3, 3.75);
+      break;
+    }
+    case 'supermarket': {
+      const h = 5.6 + (L - 1) * 1.6;
+      b.box(10, 0.2, 8.6, 0x9ca3af);
+      b.box(9.8, h, 8.2, 0xf0fdf4, 0, 0.2);
+      b.box(10, 1.4, 8.4, col, 0, h + 0.2);
+      glassZ(4.12, 0.4, 7.4, 3);
+      b.box(5, 0.25, 1.8, col, 0, 3.6, 4.9);
+      for (let i = 0; i < 4 + L; i++) b.box(0.6, 0.7, 0.9, 0x94a3b8, -4.4 + i * 0.75, 0.2, 5.6);
+      if (L >= 2) { b.box(2, 1, 1.6, 0xcbd5e1, -2.5, h + 1.6, 0); b.box(2, 1, 1.6, 0xcbd5e1, 2.5, h + 1.6, 0); }
+      frontSign('🛒 SUPERMARKET', 7, 1.1, h + 0.9, 4.25);
+      break;
+    }
+    case 'cars': {
+      const h = 4.6 + (L - 1) * 1.8;
+      b.box(10, 0.2, 8.6, 0x9ca3af);
+      b.glassBox(9.6, h, 6.4, 0xbfe6ff, 0, 0.2, -0.8);
+      b.box(9.8, 0.5, 6.6, 0x0f172a, 0, h + 0.2, -0.8);
+      b.box(9.8, 0.2, 6.6, 0x0f172a, 0, 0.2, -0.8);
+      const carCols = [0xef4444, 0xfacc15, 0x22c55e];
+      for (let i = 0; i < Math.min(3, L + 1); i++) {
+        const base = new THREE.Matrix4().makeRotationY(Math.PI / 2).setPosition(-3 + i * 3, 0.2, i === 2 ? -1.5 : 3.2);
+        const prev = b.base.clone(); b.base.copy(base);
+        b.box(1.9, 0.75, 4.1, carCols[i], 0, 0.3, 0); b.box(1.7, 0.7, 2.2, carCols[i], 0, 1.05, -0.25); b.box(1.72, 0.5, 2.0, 0x1e3a5f, 0, 1.12, -0.25);
+        b.base.copy(prev);
+      }
+      for (const x of [-4.6, 4.6]) { b.cyl(0.06, 4.5, 0xe5e7eb, x, 0.2, 4, 6); b.box(0.05, 0.9, 1.2, col, x, 3.6, 4.6); }
+      frontSign('🚗 AUTO CENTER', 6, 1, h - 0.4, 2.42);
+      break;
+    }
+    case 'hotel': {
+      const floors = 4 + (L - 1) * 2;
+      const h = floors * 2.8;
+      b.box(9, 0.2, 8, 0x9ca3af);
+      b.box(8.4, h, 7, 0xfce7f3, 0, 0.2);
+      b.box(8.8, 0.5, 7.4, col, 0, h + 0.2);
+      for (let f = 1; f < floors; f++) for (let c = -1; c <= 1; c++) {
+        b.box(1.8, 1.3, 0.1, 0x9fd3ff, c * 2.6, f * 2.8 + 0.9, 3.52);
+        b.box(2, 0.12, 0.8, 0xffffff, c * 2.6, f * 2.8 + 0.6, 3.9); // balcony
+      }
+      b.box(3.6, 0.25, 2.2, col, 0, 3, 4.6);
+      glassZ(3.52, 0.2, 2.4, 2.6);
+      frontSign('🏨 HOTEL', 3.6, 0.9, 3.75, 5.75);
+      if (L >= 3) b.box(2, 1.6, 2, 0xfacc15, 0, h + 0.7);
+      break;
+    }
+    default: { // mall
+      const h = 7 + (L - 1) * 3;
+      b.box(11, 0.2, 9.4, 0x9ca3af);
+      b.box(10.6, h, 9, 0xfffbeb, 0, 0.2);
+      glassZ(4.52, 0.4, 8, h - 1.2);
+      for (let f = 1; f < Math.floor(h / 3.4) + 1; f++) b.box(10.6, 0.25, 0.3, 0xffffff, 0, f * 3.4, 4.6);
+      b.ball(3, 0xfde68a, 0, h + 0.2, 0, true);
+      b.box(10.8, 0.6, 9.2, col, 0, h + 0.2);
+      frontSign('🏬 SHOPPING MALL', 7, 1.2, h - 0.6, 4.7);
+      break;
+    }
+  }
+  g.add(b.build(true));
+  return g;
+}
+
+/** Window rows on a +Z face. */
+function windowRows2(b: GeoBuilder, faceZ: number, width: number, floors: number, y0: number, floorH: number) {
+  const cols = Math.max(2, Math.floor(width / 1.9));
+  for (let f = 0; f < floors; f++) for (let c = 0; c < cols; c++) {
+    const x = -width / 2 + (c + 0.5) * (width / cols);
+    b.box(width / cols * 0.6, floorH * 0.5, 0.1, (c + f) % 4 === 0 ? 0xffe9a8 : 0x9fd3ff, x, y0 + f * floorH + floorH * 0.25, faceZ);
+  }
+}
+
 export function createStructure(id: StructureId, accent: number): THREE.Group {
+  const b = new GeoBuilder();
   const g = new THREE.Group();
   switch (id) {
     case 'billboard': {
-      g.add(cyl(0.15, 0.15, 4, 0x6b7280, 6, 0, 0, -1.5));
-      g.add(cyl(0.15, 0.15, 4, 0x6b7280, 6, 0, 0, 1.5));
-      const s = signMesh('BEST PRICES!', 5, 2.2, '#' + accent.toString(16).padStart(6, '0'), '#ffffff');
-      s.position.set(0.2, 5, 0); s.rotation.y = Math.PI / 2;
+      b.cyl(0.18, 5, PAL.metal, 0, 0, -2, 6); b.cyl(0.18, 5, PAL.metal, 0, 0, 2, 6);
+      b.box(0.35, 2.8, 6.2, 0x1f2937, 0, 4.4, 0);
+      const s = makeSign('BEST PRICES!', 6, 2.5, '#' + shade(accent, -0.1).toString(16).padStart(6, '0'), '#ffffff');
+      s.position.set(0.2, 5.8, 0);
       g.add(s);
-      g.add(box(0.3, 2.4, 5.2, 0x374151, 0, 3.9, 0));
       break;
     }
     case 'parking': {
-      const lot = new THREE.Mesh(new THREE.PlaneGeometry(9, 6), mat(0x4b5563));
-      lot.rotation.x = -Math.PI / 2; lot.position.y = 0.04;
-      g.add(lot);
-      for (let i = -1; i <= 1; i++) {
-        const l = new THREE.Mesh(new THREE.PlaneGeometry(0.15, 5), mat(0xffffff));
-        l.rotation.x = -Math.PI / 2; l.position.set(i * 3, 0.05, 0);
-        g.add(l);
+      b.flat(9, 6, 0x4b5563, 0, 0.05, 0);
+      for (let i = -1; i <= 2; i++) b.flat(0.15, 5, 0xffffff, -4.5 + i * 3 + 1.5, 0.06, 0);
+      const base = new THREE.Matrix4();
+      for (const [x, c] of [[-1.5, 0xef4444], [1.5, 0x3b82f6]] as const) {
+        b.base.copy(base.makeTranslation(x, 0, 0));
+        b.box(1.9, 0.75, 4.1, c, 0, 0.3, 0); b.box(1.7, 0.7, 2.2, c, 0, 1.05, -0.25); b.box(1.72, 0.5, 2.0, 0x1e3a5f, 0, 1.12, -0.25);
       }
-      const c1 = carMesh(0xef4444); c1.position.set(-1.5, 0, 0); g.add(c1);
-      const c2 = carMesh(0x3b82f6); c2.position.set(4.3, 0, 0.3); g.add(c2);
-      const p = signMesh('P', 1, 1, '#1d4ed8', '#ffffff');
-      p.position.set(4.5, 2.6, -2.8); p.rotation.y = Math.PI / 2;
-      g.add(p); g.add(cyl(0.06, 0.06, 2.2, 0x6b7280, 6, 4.5, 0, -2.8));
+      b.base.identity();
+      b.cyl(0.06, 2.2, PAL.metal, 4.4, 0, -2.8, 6);
+      const p = makeSign('P', 0.9, 0.9, '#1d4ed8', '#ffffff');
+      p.position.set(4.45, 2.4, -2.8);
+      g.add(p);
       break;
     }
     case 'warehouse': {
-      g.add(box(6, 3.4, 6, 0xb45309));
-      const roof = new THREE.Mesh(new THREE.CylinderGeometry(3.1, 3.1, 6.2, 12, 1, false, 0, Math.PI), mat(0x78716c));
-      roof.rotation.z = Math.PI / 2; roof.rotation.y = Math.PI / 2; roof.position.y = 3.4;
-      g.add(roof);
-      g.add(box(0.1, 2.4, 2.4, 0x57534e, 3.02, 0, 0));
-      for (let i = 0; i < 3; i++) g.add(box(0.9, 0.9, 0.9, 0xd6a35c, 3.8, 0, -1.5 + i * 1.1));
+      b.box(6, 3.6, 6, 0xb45309);
+      b.add(new THREE.CylinderGeometry(3.1, 3.1, 6.2, 12, 1, false, 0, Math.PI), 0x78716c, 1, 1, 1, { y: 3.6, rz: Math.PI / 2, ry: Math.PI / 2 });
+      b.box(0.1, 2.6, 2.6, 0x57534e, 3.02, 0, 0);
+      for (let i = 0; i < 3; i++) b.box(0.9, 0.9, 0.9, 0xd6a35c, 3.8, 0, -1.4 + i * 1.1);
       break;
     }
     case 'terrace': {
-      const deck = box(7, 0.2, 5, 0xc08a5b);
-      g.add(deck);
-      for (const [x, z] of [[-2, -1.2], [1.5, -1.2], [-0.2, 1.4]]) {
-        g.add(cyl(0.6, 0.6, 0.08, 0xffffff, 12, x, 0.95, z));
-        g.add(cyl(0.08, 0.08, 0.9, 0x374151, 6, x, 0.15, z));
-        g.add(cyl(0.05, 0.05, 2.4, 0xe5e7eb, 6, x, 0.15, z));
-        const um = new THREE.Mesh(new THREE.ConeGeometry(1.5, 0.7, 8), mat(accent));
-        um.position.set(x, 2.7, z); um.castShadow = true;
-        g.add(um);
+      b.box(6, 0.2, 4, 0xc08a5b);
+      for (const [x, z] of [[-1.8, -1], [1.6, -1], [0, 1.1]]) {
+        b.cyl(0.55, 0.06, 0xffffff, x, 0.95, z, 12);
+        b.cyl(0.06, 0.8, PAL.metal, x, 0.2, z, 6);
+        b.cyl(0.04, 2.4, 0xe5e7eb, x, 0.2, z, 6);
+        b.cone(1.4, 0.7, accent, x, 2.5, z, 8);
       }
       break;
     }
     case 'fountain': {
-      g.add(cyl(2.4, 2.6, 0.7, 0xd6d3d1, 16));
-      const w = new THREE.Mesh(new THREE.CylinderGeometry(2.1, 2.1, 0.1, 16), new THREE.MeshStandardMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.85 }));
-      w.position.y = 0.65; g.add(w);
-      g.add(cyl(0.3, 0.4, 2, 0xd6d3d1, 8));
-      const gold = new THREE.Mesh(new THREE.TorusKnotGeometry(0.45, 0.15, 40, 6), mat(0xfacc15, { metalness: 0.7, roughness: 0.3 }));
+      b.cyl(2.4, 0.7, 0xd6d3d1, 0, 0, 0, 12);
+      b.cyl(2.1, 0.72, 0x5ec8f2, 0, 0, 0, 12);
+      b.cyl(0.3, 2, 0xd6d3d1, 0, 0, 0, 8);
+      const gold = new THREE.Mesh(new THREE.TorusKnotGeometry(0.45, 0.15, 40, 6), new THREE.MeshStandardMaterial({ color: 0xfacc15, metalness: 0.7, roughness: 0.3 }));
       gold.position.y = 2.5; gold.name = 'spin';
       g.add(gold);
       break;
     }
-    case 'branch': {
-      g.add(facadeBox(6, 5, 5, '#fecdd3', 2, 0, 0, 0, 0x9f1239));
-      g.add(box(6.3, 0.4, 5.3, accent, 0, 5));
-      glassFront(g, 3, 0.2, 0, 3.5, 2);
-      frontSign(g, 'BRANCH', 3.02, 3.8, 0, 4, 0.8, '#9f1239', '#ffffff');
-      break;
-    }
   }
-  g.traverse((o) => { if ((o as THREE.Mesh).isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  g.add(b.build(true));
   return g;
 }
 
 export function createCounter(accent: number): THREE.Group {
-  const g = new THREE.Group();
-  g.add(box(1.2, 1.1, 3, 0xffffff));
-  g.add(box(1.4, 0.12, 3.2, accent, 0, 1.1));
-  g.add(box(0.5, 0.4, 0.5, 0x111827, 0, 1.22, 0.8)); // register
-  g.add(cyl(0.2, 0.2, 0.6, 0xfde047, 10, 0, 1.22, -0.6)); // jug
-  return g;
+  const b = new GeoBuilder();
+  b.box(1.3, 1.1, 3.2, 0xffffff);
+  b.box(1.5, 0.12, 3.4, accent, 0, 1.1);
+  b.box(0.5, 0.4, 0.5, 0x111827, 0, 1.22, 0.9); // register
+  b.cyl(0.2, 0.6, 0xfde047, 0, 1.22, -0.7, 8);
+  return b.build(true);
 }
 
 export function createMachine(accent: number): THREE.Group {
-  const g = new THREE.Group();
-  g.add(box(2.2, 1.8, 2, 0x94a3b8));
-  g.add(box(2.3, 0.2, 2.1, accent, 0, 1.8));
-  const gear = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.15, 6, 10), mat(0xfacc15));
+  const b = new GeoBuilder();
+  b.box(2.2, 1.8, 2, 0x94a3b8);
+  b.box(2.3, 0.2, 2.1, accent, 0, 1.8);
+  b.cyl(0.6, 0.1, 0x64748b, 0, 3.2, 0, 12);
+  const g = b.build(true);
+  const gear = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.15, 6, 10), new THREE.MeshStandardMaterial({ color: 0xfacc15, flatShading: true }));
   gear.position.set(1.15, 1.1, 0); gear.rotation.y = Math.PI / 2; gear.name = 'gear';
   g.add(gear);
   const tank = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 1.2, 12), new THREE.MeshStandardMaterial({ color: 0xfde047, transparent: true, opacity: 0.8 }));
   tank.position.set(0, 2.6, 0);
   g.add(tank);
-  g.add(cyl(0.6, 0.6, 0.1, 0x64748b, 12, 0, 3.2));
   return g;
 }
 
 export function createCrate(): THREE.Group {
-  const g = new THREE.Group();
-  g.add(box(1, 1, 1, 0xd6a35c));
-  g.add(box(1.02, 0.15, 1.02, 0x92400e, 0, 0.42));
-  return g;
+  const b = new GeoBuilder();
+  b.box(1, 1, 1, 0xd6a35c);
+  b.box(1.04, 0.14, 1.04, 0x92400e, 0, 0.42);
+  b.box(0.14, 1.02, 1.04, 0x92400e, 0, 0);
+  return b.build(true);
 }
 
 export function createDeliveryTruck(): THREE.Group {
-  const g = new THREE.Group();
-  g.add(box(2.4, 2.6, 5, 0xffffff, 0, 0.5, -0.8));
-  g.add(box(2.3, 1.8, 1.8, 0xef4444, 0, 0.5, 2.6));
+  const b = new GeoBuilder();
+  b.box(2.4, 2.6, 5, 0xffffff, 0, 0.5, -0.8);
+  b.box(2.3, 1.8, 1.8, 0xef4444, 0, 0.5, 2.6);
+  b.box(2.32, 0.7, 0.1, 0x1e3a5f, 0, 1.4, 3.52);
   for (const [x, z] of [[-1.1, 2.4], [1.1, 2.4], [-1.1, -2.2], [1.1, -2.2]]) {
-    const w = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.45, 0.35, 10), mat(0x111827));
-    w.rotation.z = Math.PI / 2; w.position.set(x, 0.45, z); g.add(w);
+    b.add(new THREE.CylinderGeometry(1, 1, 1, 10), 0x111827, 0.45, 0.35, 0.45, { x, y: 0.45, z, rz: Math.PI / 2 });
   }
-  return g;
-}
-
-/** Staff figure (NPC) — visual representation of a hired worker. */
-export function createStaff(kind: WorkerId): THREE.Group {
-  const colors: Record<WorkerId, number> = { cashier: 0x0ea5e9, worker: 0xf59e0b, manager: 0x111827, delivery: 0xdc2626, marketer: 0xec4899 };
-  const g = pedestrianMesh(colors[kind]);
-  if (kind === 'manager') g.add(box(0.12, 0.5, 0.05, 0xdc2626, 0, 1.0, 0.19)); // tie
-  if (kind === 'worker') g.add(cyl(0.32, 0.32, 0.18, 0xfacc15, 10, 0, 2.0)); // hard hat
-  if (kind === 'marketer') {
-    const s = signMesh('SALE!', 1.2, 0.7, '#ec4899', '#ffffff');
-    s.position.set(0, 2.6, 0.2); g.add(s);
-    g.add(cyl(0.04, 0.04, 1.4, 0x6b7280, 4, 0, 1.2, 0.2));
-  }
-  if (kind === 'delivery') {
-    const scooter = new THREE.Group();
-    scooter.add(box(0.5, 0.4, 1.6, 0xdc2626, 0, 0.3));
-    scooter.add(box(0.7, 0.6, 0.6, 0xffffff, 0, 0.7, -0.5));
-    scooter.position.set(0.9, 0, 0);
-    g.add(scooter);
-  }
+  const g = b.build(true);
+  const s = makeSign('📦 BIG DELIVERY', 4.6, 1.2, '#ef4444', '#ffffff');
+  s.rotation.y = Math.PI / 2;
+  s.position.set(1.22, 1.9, -0.8);
+  g.add(s);
   return g;
 }
 
 export function createMegaMall(): THREE.Group {
+  const b = new GeoBuilder();
   const g = new THREE.Group();
-  g.add(facadeBox(24, 10, 26, '#fdf4ff', 3, 0, 0, 0, 0xa21caf));
-  g.add(facadeBox(16, 8, 18, '#f5d0fe', 2, -2, 10, 0, 0xa21caf));
-  const dome = new THREE.Mesh(new THREE.SphereGeometry(6, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2), mat(0xfacc15, { metalness: 0.6, roughness: 0.2 }));
-  dome.position.set(-2, 18, 0); g.add(dome);
-  frontSign(g, 'MEGA MALL', 12.02, 7.5, 0, 14, 2.4, '#a21caf', '#fde047');
-  glassFront(g, 12, 0.2, 0, 18, 5);
-  g.traverse((o) => { if ((o as THREE.Mesh).isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  b.box(24, 10, 26, 0xfdf4ff);
+  b.box(16, 8, 18, 0xf5d0fe, -2, 10);
+  b.glassBox(0.2, 8, 18, PAL.glass, 12, 0.5, 0);
+  for (let f = 1; f < 3; f++) b.box(0.4, 0.3, 26, 0xffffff, 12.1, f * 3.3, 0);
+  b.ball(6, 0xfacc15, -2, 18, 0, true);
+  b.box(24.4, 0.6, 26.4, 0xa21caf, 0, 10);
+  g.add(b.build(true));
+  const s = makeSign('🏬 MEGA MALL', 14, 2.4, '#a21caf', '#fde047');
+  s.position.set(12.2, 8.2, 0);
+  g.add(s);
   return g;
 }
 
 export function createConstructionSite(): THREE.Group {
+  const b = new GeoBuilder();
   const g = new THREE.Group();
-  const dirt = new THREE.Mesh(new THREE.PlaneGeometry(26, 26), mat(0xa16207));
-  dirt.rotation.x = -Math.PI / 2; dirt.position.y = 0.04; g.add(dirt);
-  for (let i = -12; i <= 12; i += 2) {
-    g.add(box(0.15, 1.6, 0.15, 0xf97316, 13, 0, i));
-    g.add(box(0.15, 1.6, 0.15, 0xf97316, -13, 0, i));
-  }
-  g.add(box(0.1, 0.25, 26, 0xfacc15, 13, 1.2, 0));
-  // Crane
-  g.add(box(1, 22, 1, 0xfacc15, -6, 0, -8));
-  const jib = box(16, 0.8, 0.8, 0xfacc15, 0, 22, -8);
+  b.flat(26, 26, 0xa16207, 0, 0.05, 0);
+  for (let i = -12; i <= 12; i += 2) { b.box(0.15, 1.6, 0.15, 0xf97316, 13, 0, i); b.box(0.15, 1.6, 0.15, 0xf97316, -13, 0, i); }
+  b.box(0.1, 0.25, 26, 0xfacc15, 13, 1.2, 0);
+  b.box(1, 22, 1, 0xfacc15, -6, 0, -8);
+  for (let y = 2; y < 22; y += 2) b.box(1.1, 0.1, 1.1, 0x111827, -6, y, -8);
+  g.add(b.build(true));
+  const jb = new GeoBuilder();
+  jb.box(16, 0.8, 0.8, 0xfacc15, 4, 0, 0);
+  jb.box(2.4, 1.6, 1.4, 0x475569, -3.4, -0.4, 0);
+  const jib = jb.build(true);
+  jib.position.set(-6, 22, -8);
   jib.name = 'spin';
   g.add(jib);
-  frontSign(g, 'MEGA MALL — СКОРО', 13.1, 2.6, 0, 9, 1.4, '#a21caf', '#ffffff');
+  const s = makeSign('MEGA MALL — СКОРО', 9, 1.4, '#a21caf', '#ffffff');
+  s.position.set(13.1, 2.6, 0);
+  g.add(s);
   return g;
 }

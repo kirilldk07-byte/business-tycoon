@@ -6,8 +6,8 @@ import { q2 } from '../../../shared/protocol/codec';
 import { C2S, EMOTES, EMOTE_COOLDOWN_MS, S2C, type InteractTarget, type MoveTuple } from '../../../shared/protocol/messages';
 import { ANIM, type ActiveEvent, type BusinessState, type PlayerPublic, type RoomSnapshot } from '../../../shared/types/state';
 import type { AudioManager } from '../audio/AudioManager';
-import { createConstructionSite, createCrate, createDeliveryTruck, createMegaMall, TIER_SIZE } from '../business/BuildingFactory';
-import { BusinessView } from '../business/BusinessView';
+import { createConstructionSite, createCrate, createDeliveryTruck, createMegaMall } from '../business/BuildingFactory';
+import { BusinessView, type PadDef } from '../business/BusinessView';
 import { CLIENT, isTouch } from '../config/client';
 import { resolveQuality, type Quality } from '../config/quality';
 import { Interpolator } from '../multiplayer/Interpolator';
@@ -37,6 +37,7 @@ interface RemotePlayer {
 }
 
 interface Box2 { minX: number; maxX: number; minZ: number; maxZ: number }
+type Target = { label: string; target?: InteractTarget; pad?: PadDef; view?: BusinessView };
 
 const hex = (n: number) => '#' + n.toString(16).padStart(6, '0');
 
@@ -60,6 +61,7 @@ export class Game {
   private myRot = 0;
   private myAnim: number = ANIM.idle;
   private interactUntil = 0;
+  private carryUntil = 0;
   private grounded = true;
   private sendAcc = 0;
   private lastSent = '';
@@ -76,9 +78,10 @@ export class Game {
   private obstacles: Box2[] = [];
   private megaSite: THREE.Object3D | null = null;
   private megaMall: THREE.Object3D | null = null;
-  private crates = new Map<number, THREE.Object3D>();
-  private truck: THREE.Object3D | null = null;
-  private currentTarget: { target: InteractTarget; label: string } | null = null;
+  private crates = new Map<string, THREE.Object3D>();
+  private trucks = new Map<number, THREE.Object3D>();
+  private currentTarget: Target | null = null;
+  onOpenPanel: (tab: 'upgrades') => void = () => {};
   private timer = new THREE.Timer();
   private elapsed = 0;
   private ended: 'win' | 'lose' | 'draw' | null = null;
@@ -146,34 +149,19 @@ export class Game {
       for (const t of m.b) {
         const v = this.views.get(t.id);
         if (!v?.state) continue;
-        v.state.cash = t.cash; v.state.value = t.value; v.state.stats.customers = t.customers;
-        v.updateTick(t.stock, t.queue);
+        v.state.value = t.value; v.state.stats.customers = t.customers;
+        v.updateTick(t.stock, t.queue, t.cash);
+        this.ipm.set(t.id, t.ipm);
         const rb = this.room?.businesses.find((b) => b.id === t.id);
         if (rb) Object.assign(rb, { cash: t.cash, stock: t.stock, queue: t.queue, value: t.value });
       }
     });
     n.on(S2C.BUSINESS_UPDATE, (m) => this.applyBusiness(m.b, true, m.cause, m.by));
-    n.on(S2C.CUSTOMER_SPAWN, (m) => this.views.get(m.b)?.customers.spawn(m.id, m.g, m.arrive, m.side));
-    n.on(S2C.CUSTOMER_SERVED, (m) => {
-      const v = this.views.get(m.b);
-      if (!v) return;
-      const local = v.customers.served(m.id);
-      const at = v.toWorld(local.setY(2.2));
-      const mine = this.isMyBiz(m.b);
-      this.effects.floatText(at, `+$${formatMoney(m.amt)}`, mine ? 'money' : 'money dim');
-      if (this.near(at, 40)) this.effects.burst(at, 'coins', mine ? 8 : 4);
-      if (mine) { this.audio.play('money'); this.hud.flashMoney(); }
-    });
-    n.on(S2C.CUSTOMER_LEFT, (m) => {
-      const v = this.views.get(m.b);
-      if (!v) return;
-      const at = v.toWorld(v.customers.left(m.id).setY(2.4));
-      this.effects.floatText(at, '😠', 'emoji');
-    });
+    n.on(S2C.CUSTOMERS, (m) => this.views.get(m.b)?.onCustomers(m.sp, m.pd, m.lf));
     n.on(S2C.DELIVERY_SALE, (m) => {
       const v = this.views.get(m.b);
       if (!v) return;
-      const at = v.toWorld(new THREE.Vector3(14, 2.5, 0));
+      const at = v.toWorld(new THREE.Vector3(PLOT_LOCAL.staff.delivery.lx, 2.5, PLOT_LOCAL.staff.delivery.lz));
       this.effects.floatText(at, `🛵 +$${formatMoney(m.amt)}`, 'money');
       if (this.isMyBiz(m.b)) this.audio.play('money');
     });
@@ -190,6 +178,9 @@ export class Game {
       this.myPos.set(m.p[0], m.p[1], m.p[2]);
     });
   }
+
+  /** Latest income per minute per business (for HUD). */
+  readonly ipm = new Map<number, number>();
 
   private isMyBiz(id: number) {
     return !!this.views.get(id)?.state?.ownerIds.includes(this.myId ?? '');
@@ -291,11 +282,15 @@ export class Game {
     if (!v) {
       const owner = this.room?.players.find((p) => b.ownerIds.includes(p.id));
       const accent = this.room?.mode === 'vs' ? owner?.color ?? 0x3b82f6 : 0x8b5cf6;
-      v = new BusinessView(b.plot, accent, this.effects);
-      v.onBuilt = (label, at) => {
-        this.effects.floatText(at, `BUILD COMPLETE! ${label}`, 'big');
-        this.audio.play('purchase');
+      const mineBiz = b.ownerIds.includes(this.myId ?? '');
+      v = new BusinessView(b.plot, accent, this.effects, this.world.crowd, this.quality.maxNpcs, mineBiz);
+      const view = v;
+      v.onBuilt = (label, at, big) => {
+        if (!this.near(at, 60)) return;
+        this.effects.floatText(at, view.isMine ? `BUILD COMPLETE! ${label}` : label, 'big');
+        if (view.isMine) { this.audio.play('purchase'); this.rig.shake(big ? 0.35 : 0.18); this.effects.burst(at, 'confetti', big ? 60 : 25); }
       };
+      v.onPay = () => { if (view.isMine) { this.audio.play('money'); this.hud.flashMoney(); } };
       this.views.set(b.id, v);
       this.scene.add(v.root);
       const names = this.room?.players.filter((p) => b.ownerIds.includes(p.id)).map((p) => p.name).join(' + ') ?? '';
@@ -309,10 +304,9 @@ export class Game {
     if (animate && cause) {
       const mine = b.ownerIds.includes(this.myId ?? '');
       const center = v.toWorld(new THREE.Vector3(PLOT_LOCAL.building.lx, 3, 0));
-      if (cause === 'tier' && b.tier > prevTier) {
-        this.audio.play('construction');
-        if (mine) this.rig.shake(0.25);
-        if (!mine) this.hud.toast(`🏗️ Соперник строит: уровень ${b.tier}`, 'info');
+      if ((cause === 'tier' && b.tier > prevTier) || cause.startsWith('venue')) {
+        if (mine) this.audio.play('construction');
+        if (!mine && this.room?.mode === 'vs') this.hud.toast(cause === 'tier' ? `🏗️ Соперник: HQ уровень ${b.tier}` : `🏗️ Соперник открыл новый бизнес`, 'info');
       } else if (cause.startsWith('upgrade')) {
         this.effects.burst(center, 'sparkle', 24);
         if (mine) this.audio.play('upgrade');
@@ -352,7 +346,7 @@ export class Game {
   }
 
   private clearMatchVisuals() {
-    for (const v of this.views.values()) { v.clearDynamic(); this.scene.remove(v.root); }
+    for (const v of this.views.values()) { v.dispose(); this.scene.remove(v.root); }
     this.views.clear();
     if (this.megaSite) { this.scene.remove(this.megaSite); this.megaSite = null; }
     if (this.megaMall) { this.scene.remove(this.megaMall); this.megaMall = null; }
@@ -363,71 +357,67 @@ export class Game {
 
   private rebuildObstacles() {
     const obs: Box2[] = [];
-    const addBox = (cx: number, cz: number, w: number, d: number) => obs.push({ minX: cx - w / 2, maxX: cx + w / 2, minZ: cz - d / 2, maxZ: cz + d / 2 });
+    const v3 = new THREE.Vector3();
     for (const v of this.views.values()) {
-      if (!v.state) continue;
-      const pl = v.plot;
-      const b = plotToWorld(pl, PLOT_LOCAL.building.lx, PLOT_LOCAL.building.lz);
-      const size = Math.max(3, TIER_SIZE[v.state.tier - 1] + (v.state.tier >= 8 ? 3 : 0));
-      addBox(b.x, b.z, size, size);
-      const c = plotToWorld(pl, PLOT_LOCAL.counter.lx, PLOT_LOCAL.counter.lz);
-      addBox(c.x, c.z, 1.4, 3.2);
-      const m = plotToWorld(pl, PLOT_LOCAL.machine.lx, PLOT_LOCAL.machine.lz);
-      addBox(m.x, m.z, 2.3, 2.1);
-      for (const s of v.state.structures) {
-        if (s === 'parking' || s === 'terrace' || s === 'billboard') continue;
-        const at = PLOT_LOCAL.structures[s];
-        const w = plotToWorld(pl, at.lx, at.lz);
-        const size2 = s === 'fountain' ? 5 : 6;
-        addBox(w.x, w.z, size2, size2);
+      for (const f of v.footprints()) {
+        v3.set(f.lx, 0, f.lz);
+        v.root.localToWorld(v3);
+        obs.push({ minX: v3.x - f.w / 2, maxX: v3.x + f.w / 2, minZ: v3.z - f.d / 2, maxZ: v3.z + f.d / 2 });
       }
     }
-    if (this.megaMall) addBox(PLOTS[MEGA_MALL_PLOT].x, PLOTS[MEGA_MALL_PLOT].z, 24, 26);
-    addBox(0, 0, 8.6, 8.6); // central fountain
+    if (this.megaMall) obs.push({ minX: PLOTS[MEGA_MALL_PLOT].x - 12, maxX: PLOTS[MEGA_MALL_PLOT].x + 12, minZ: -13, maxZ: 13 });
+    obs.push({ minX: -4, maxX: 4, minZ: -4, maxZ: 4 }); // park fountain
     this.obstacles = obs;
   }
 
   // -------------------------------------------------------------- events
 
   private applyEventVisuals(ev: ActiveEvent | null) {
-    // Crates + truck for DELIVERY
-    const want = ev?.kind === 'delivery' ? new Set(ev.crates ?? []) : new Set<number>();
-    for (const [i, obj] of this.crates) {
-      if (!want.has(i)) {
-        this.effects.burst(obj.position.clone().setY(1), 'sparkle', 10);
-        this.scene.remove(obj);
-        this.crates.delete(i);
-        this.audio.play('produce');
-      }
+    // BIG DELIVERY: a truck and crates at every business (each player unloads their own).
+    const want = new Set<string>();
+    if (ev?.kind === 'delivery' && ev.crates) {
+      for (const [bid, list] of Object.entries(ev.crates)) for (const i of list) want.add(`${bid}:${i}`);
     }
-    const biz = this.room?.businesses[0];
-    if (biz) {
-      for (const i of want) {
-        if (this.crates.has(i)) continue;
-        const loc = PLOT_LOCAL.crates[i];
-        const w = plotToWorld(biz.plot, loc.lx, loc.lz);
-        const c = createCrate();
-        c.position.set(w.x, 0, w.z);
-        this.scene.add(c);
-        this.crates.set(i, c);
-      }
+    for (const [key, obj] of this.crates) {
+      if (want.has(key)) continue;
+      if (this.near(obj.position, 50)) this.effects.burst(obj.position.clone().setY(1), 'sparkle', 10);
+      this.scene.remove(obj);
+      this.crates.delete(key);
+      if (this.isMyBiz(Number(key.split(':')[0]))) this.audio.play('produce');
     }
-    if (ev?.kind === 'delivery' && !this.truck && biz) {
-      this.truck = createDeliveryTruck();
-      const w = plotToWorld(biz.plot, 12, -12);
-      this.truck.position.set(w.x, 0, w.z);
-      this.scene.add(this.truck);
-    } else if (ev?.kind !== 'delivery' && this.truck) {
-      this.scene.remove(this.truck);
-      this.truck = null;
+    for (const key of want) {
+      if (this.crates.has(key)) continue;
+      const [bid, i] = key.split(':').map(Number);
+      const biz = this.room?.businesses.find((b) => b.id === bid);
+      if (!biz) continue;
+      const loc = PLOT_LOCAL.crates[i];
+      const w = plotToWorld(biz.plot, loc.lx, loc.lz);
+      const c = createCrate();
+      c.position.set(w.x, 0, w.z);
+      c.rotation.y = i * 0.7;
+      this.scene.add(c);
+      this.crates.set(key, c);
     }
-    // Power switches
-    for (const s of POWER_SWITCHES) {
-      if (ev?.kind !== 'power') this.world.setSwitchState(s.id, 'idle');
+    const truckFor = ev?.kind === 'delivery' ? Object.keys(ev.crates ?? {}) : [];
+    for (const [bid, t] of this.trucks) if (!truckFor.includes(String(bid))) { this.scene.remove(t); this.trucks.delete(bid); }
+    for (const bidS of truckFor) {
+      const bid = Number(bidS);
+      const biz = this.room?.businesses.find((b) => b.id === bid);
+      if (!biz || this.trucks.has(bid)) continue;
+      const t = createDeliveryTruck();
+      const w = plotToWorld(biz.plot, 17, -12.5);
+      t.position.set(w.x, 0, w.z);
+      t.rotation.y = PLOTS[biz.plot].dir > 0 ? -Math.PI / 2 : Math.PI / 2;
+      this.scene.add(t);
+      this.trucks.set(bid, t);
+    }
+    // Power generators
+    for (const sw of POWER_SWITCHES) {
+      if (ev?.kind !== 'power') this.world.setSwitchState(sw.id, 'idle');
       else {
-        const t = ev.switches?.[s.id] ?? 0;
+        const t = ev.switches?.[sw.id] ?? 0;
         const on = t > 0 && this.net.serverNow() - t <= EVENTS.powerWindowMs;
-        this.world.setSwitchState(s.id, on ? 'on' : 'alarm');
+        this.world.setSwitchState(sw.id, on ? 'on' : 'alarm');
       }
     }
   }
@@ -445,27 +435,38 @@ export class Game {
     return true;
   }
 
-  private findTarget(): { target: InteractTarget; label: string } | null {
+  private findTarget(): Target | null {
     if (!this.room || this.room.status !== 'playing') return null;
     const R = PLAYER.interactRadius;
-    let best: { target: InteractTarget; label: string; d: number } | null = null;
-    const consider = (x: number, z: number, target: InteractTarget, label: string) => {
+    let best: (Target & { d: number }) | null = null;
+    const consider = (x: number, z: number, t: Target, radius = R) => {
       const d = Math.hypot(this.myPos.x - x, this.myPos.z - z);
-      if (d <= R && (!best || d < best.d)) best = { target, label, d };
+      if (d <= radius && (!best || d < best.d)) best = { ...t, d };
     };
     for (const v of this.views.values()) {
       if (!v.state?.ownerIds.includes(this.myId ?? '')) continue;
-      const c = plotToWorld(v.plot, PLOT_LOCAL.counter.lx, PLOT_LOCAL.counter.lz);
-      consider(c.x, c.z, { kind: 'counter', biz: v.state.id }, 'Обслужить клиента');
-      const m = plotToWorld(v.plot, PLOT_LOCAL.machine.lx, PLOT_LOCAL.machine.lz);
-      consider(m.x, m.z, { kind: 'machine', biz: v.state.id }, 'Произвести товар');
+      if (v.state.tier >= 1) {
+        const c = plotToWorld(v.plot, PLOT_LOCAL.counter.lx, PLOT_LOCAL.counter.lz);
+        consider(c.x, c.z, { target: { kind: 'counter', biz: v.state.id }, label: 'Обслужить клиента' });
+        const m = plotToWorld(v.plot, PLOT_LOCAL.machine.lx, PLOT_LOCAL.machine.lz);
+        consider(m.x, m.z, { target: { kind: 'machine', biz: v.state.id }, label: 'Произвести товар' });
+      }
+      // Purchase pads (step on the glowing circle)
+      for (const p of v.padTargets()) {
+        const price = p.def.price === null ? '' : ` — $${formatMoney(p.def.price)}`;
+        const label = p.def.state === 'locked' ? `🔒 ${p.def.title}: ${p.def.note ?? ''}` : `${p.def.open ? 'Открыть' : 'Купить'} ${p.def.title}${price}`;
+        consider(p.x, p.z, { pad: p.def, view: v, label }, 1.9);
+      }
     }
     const ev = this.room.event;
     if (ev?.kind === 'delivery') {
-      for (const [i, obj] of this.crates) consider(obj.position.x, obj.position.z, { kind: 'crate', index: i }, 'Разгрузить ящик');
+      for (const [key, obj] of this.crates) {
+        const [bid, idx] = key.split(':').map(Number);
+        if (this.isMyBiz(bid)) consider(obj.position.x, obj.position.z, { target: { kind: 'crate', index: idx }, label: 'Разгрузить ящик' });
+      }
     }
     if (ev?.kind === 'power') {
-      for (const s of POWER_SWITCHES) consider(s.x, s.z, { kind: 'switch', id: s.id }, 'Включить рубильник');
+      for (const sw of POWER_SWITCHES) consider(sw.x, sw.z, { target: { kind: 'switch', id: sw.id }, label: 'Включить генератор' });
     }
     return best;
   }
@@ -483,7 +484,7 @@ export class Game {
       this.updateLocal(dt);
       this.updateRemotes(dt, serverNow);
       this.updateCamera(dt);
-      for (const v of this.views.values()) v.update(dt, serverNow, this.elapsed);
+      for (const v of this.views.values()) v.update(dt, serverNow, this.elapsed, this.myPos.distanceTo(v.root.position) < 70);
       if (this.room.event?.kind === 'power') this.applyEventVisuals(this.room.event);
       this.sendAcc += dt;
       if (this.sendAcc >= 1 / CLIENT.sendHz) { this.sendAcc = 0; this.sendMove(); }
@@ -532,16 +533,26 @@ export class Game {
     this.currentTarget = this.findTarget();
     this.hud.prompt(this.currentTarget ? `${isTouch ? '' : 'E — '}${this.currentTarget.label}` : null);
     if (this.input.consumeInteract() && this.currentTarget && room.status === 'playing') {
-      this.net.send({ t: C2S.INTERACT, target: this.currentTarget.target });
+      const ct = this.currentTarget;
       this.interactUntil = performance.now() + 350;
-      const tk = this.currentTarget.target.kind;
-      this.audio.play(tk === 'machine' ? 'produce' : 'ui');
-      if (tk === 'machine') this.effects.burst(this.myPos.clone().setY(1.6), 'sparkle', 5);
+      if (ct.pad) {
+        // Pads only REQUEST the purchase; the building appears after the server confirms.
+        if (ct.pad.open) this.onOpenPanel(ct.pad.open);
+        else if (ct.pad.state === 'locked') { this.audio.play('error'); this.hud.toast(`🔒 ${ct.pad.note ?? 'Пока недоступно'}`, 'bad'); }
+        else if (ct.pad.send) { this.net.send(ct.pad.send); ct.view?.markPending(ct.pad.key); this.audio.play('ui'); }
+      } else if (ct.target) {
+        this.net.send({ t: C2S.INTERACT, target: ct.target });
+        const tk = ct.target.kind;
+        this.audio.play(tk === 'machine' ? 'produce' : 'ui');
+        if (tk === 'machine') this.effects.burst(this.myPos.clone().setY(1.6), 'sparkle', 5);
+        if (tk === 'crate') this.carryUntil = performance.now() + 900;
+      }
     }
 
     if (this.ended === 'win') this.myAnim = ANIM.victory;
     else if (this.ended === 'lose') this.myAnim = ANIM.lose;
     else if (!this.grounded) this.myAnim = ANIM.jump;
+    else if (performance.now() < this.carryUntil) this.myAnim = ANIM.carry;
     else if (performance.now() < this.interactUntil) this.myAnim = ANIM.interact;
     else this.myAnim = mag > 0.05 ? (mag < 0.55 ? ANIM.walk : ANIM.run) : ANIM.idle;
     this.mySpeed = speed;

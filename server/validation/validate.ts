@@ -1,5 +1,5 @@
 import {
-  COSMETICS, STRUCTURE_IDS, UPGRADE_IDS, WORKER_IDS,
+  COSMETICS, STRUCTURE_IDS, UPGRADE_IDS, VENUE_IDS, WORKER_IDS,
 } from '../../shared/constants/config';
 import { C2S, EMOTES, type ClientMsg } from '../../shared/protocol/messages';
 
@@ -31,7 +31,7 @@ export function validateClientMsg(m: any): m is ClientMsg {
     case C2S.BUY_UPGRADE: return oneOf(UPGRADE_IDS, m.id);
     case C2S.HIRE_WORKER: return oneOf(WORKER_IDS, m.id);
     case C2S.BUILD_BUSINESS:
-      return m.kind === 'tier' || (m.kind === 'structure' && oneOf(STRUCTURE_IDS, m.id));
+      return m.kind === 'tier' || (m.kind === 'structure' && oneOf(STRUCTURE_IDS, m.id)) || (m.kind === 'venue' && oneOf(VENUE_IDS, m.id));
     case C2S.INTERACT: {
       const g = m.target;
       if (!g || typeof g !== 'object') return false;

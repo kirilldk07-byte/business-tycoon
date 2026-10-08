@@ -1,5 +1,6 @@
 import type { StructureId } from './config';
 
+
 // World layout shared by server (distance validation) and client (rendering).
 // Plots are an array so a 4-player map only needs more entries here.
 //
@@ -57,35 +58,34 @@ export const PLOT_LOCAL = {
     { lx: -8, lz: 17 },
   ],
   structures: {
-    billboard: { lx: 24.5, lz: -22.5 },
-    parking: { lx: -22, lz: 17 },
+    billboard: { lx: 24.5, lz: -22.6 },
+    parking: { lx: -22, lz: 17.5 },
     warehouse: { lx: -22, lz: -17 },
-    terrace: { lx: 7, lz: -6.5 },
-    fountain: { lx: 10, lz: 7 },
-    branch: { lx: -24, lz: 0 },
+    terrace: { lx: 6.5, lz: -6.8 },
+    fountain: { lx: 0.5, lz: -14.8 },
   } as Record<StructureId, { lx: number; lz: number }>,
   /** Physical purchase pads. */
   pads: {
-    hq: { lx: -4, lz: 6 },
-    upgrades: { lx: 3, lz: -6.5 },
+    hq: { lx: -3.5, lz: 6.5 },
+    upgrades: { lx: 12, lz: 5 },
     workers: {
-      cashier: { lx: -2, lz: 3.2 },
-      worker: { lx: -1, lz: -11.5 },
-      manager: { lx: -11, lz: 9.5 },
-      delivery: { lx: 22, lz: -8 },
-      marketer: { lx: 22, lz: 8 },
+      cashier: { lx: -1, lz: 3.4 },
+      worker: { lx: -1.2, lz: -10.6 },
+      manager: { lx: -11, lz: 9.8 },
+      delivery: { lx: 21.5, lz: -3.6 },
+      marketer: { lx: 21.5, lz: 3.6 },
     },
   },
   staff: {
-    cashier: { lx: -7, lz: 0 },
-    worker: { lx: -7.5, lz: -9 },
-    manager: { lx: -11, lz: 7 },
-    delivery: { lx: 23.5, lz: -11 },
-    marketer: { lx: 24, lz: 11 },
+    cashier: { lx: -6.6, lz: 0 },
+    worker: { lx: -7.4, lz: -9.6 },
+    manager: { lx: -11.5, lz: 8 },
+    delivery: { lx: 24, lz: -6.5 },
+    marketer: { lx: 24.2, lz: 6.5 },
   },
   crates: [
-    { lx: 12, lz: -3 }, { lx: 14, lz: -6 }, { lx: 11, lz: -8 },
-    { lx: 16, lz: -3.5 }, { lx: 18, lz: -7 }, { lx: 14, lz: -10 },
+    { lx: 14, lz: -4.5 }, { lx: 16.5, lz: -6.5 }, { lx: 13.5, lz: -8.2 },
+    { lx: 18, lz: -4.2 }, { lx: 18.6, lz: -8.4 }, { lx: 15.6, lz: -9.6 },
   ],
 };
 

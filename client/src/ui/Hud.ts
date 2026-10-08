@@ -1,9 +1,9 @@
 import {
-  COOP_GOAL, STRUCTURES, STRUCTURE_IDS, TIERS, UPGRADES, UPGRADE_IDS, WORKERS, WORKER_IDS,
+  COOP_GOAL, ECONOMY, STRUCTURES, STRUCTURE_IDS, TIERS, UPGRADES, UPGRADE_IDS, VENUES, VENUE_IDS, WORKERS, WORKER_IDS,
 } from '../../../shared/constants/config';
 import { EVENT_INFO } from '../../../shared/events';
 import {
-  checkStructure, checkTier, checkUpgrade, checkWorker, computeRates, formatMoney, megaMallMissing, upgradeCost, workerCost,
+  checkStructure, checkTier, checkUpgrade, checkVenue, checkWorker, computeRates, formatMoney, megaMallMissing, upgradeCost, venueCost, venueUnlocked, workerCost,
 } from '../../../shared/game/economy';
 import { C2S, EMOTES } from '../../../shared/protocol/messages';
 import type { ActiveEvent, BusinessState, RoomSnapshot } from '../../../shared/types/state';
@@ -52,6 +52,12 @@ export class Hud implements HudSink {
   show(on: boolean) {
     this.root.classList.toggle('hidden', !on);
     if (!on) { this.togglePanel(false); $('countdown').classList.add('hidden'); }
+  }
+
+  openTab(tab: Tab) {
+    this.tab = tab;
+    this.lastPanelKey = '';
+    this.togglePanel(true);
   }
 
   togglePanel(open = !this.panelOpen) {
@@ -174,7 +180,11 @@ export class Hud implements HudSink {
     const info = EVENT_INFO[ev.kind];
     const sec = Math.max(0, Math.ceil((ev.endsAt - now) / 1000));
     let extra = '';
-    if (ev.kind === 'delivery') extra = ` · осталось ящиков: ${ev.crates?.length ?? 0}`;
+    if (ev.kind === 'delivery') {
+      const mine = this.ctx.room() && this.myBiz(this.ctx.room()!);
+      extra = ` · твои ящики: ${mine ? ev.crates?.[mine.id]?.length ?? 0 : 0}`;
+    }
+    if (ev.kind === 'vip' && ev.reward) extra = ` · платит $${formatMoney(ev.reward)}`;
     if (ev.kind === 'power') extra = ` · рубильники: ${(ev.switches ?? []).map((t) => (t && now - t < 5000 ? '🟢' : '🔴')).join(' ')}`;
     el.innerHTML = `${info.icon} ${info.title} · ${sec}с<small>${info.desc}${extra}</small>`;
     el.classList.remove('hidden');
@@ -203,14 +213,24 @@ export class Hud implements HudSink {
       if (code === 'LOCKED') return `<button class="btn ghost" disabled>🔒</button>`;
       return `<button class="btn ${ok ? 'green' : 'ghost'}" ${ok ? '' : 'disabled'} ${data}>$${formatMoney(price)}</button>`;
     };
+    const lvl_ = (n: number, max: number) => `<div class="lvl">${Array.from({ length: max }, (_, i) => `<i class="${i < n ? 'on' : ''}"></i>`).join('')}</div>`;
     const lvl = (n: number, max: number) => `<div class="lvl">${Array.from({ length: max }, (_, i) => `<i class="${i < n ? 'on' : ''}"></i>`).join('')}</div>`;
 
     if (this.tab === 'build') {
       const c = checkTier(b);
       const next = TIERS[b.tier];
-      rows.push(`<div class="shop-row big"><div class="ico">🏗️</div><div class="info"><div class="title">LEVEL ${b.tier}: ${TIERS[b.tier - 1].name}</div>
-        <div class="desc">${next ? `Следующий: ${next.name} — больше клиентов, выше цена` : 'Максимальный уровень!'}</div>${lvl(b.tier, 10)}</div>
+      rows.push(`<div class="shop-row big"><div class="ico">🏗️</div><div class="info"><div class="title">HQ LEVEL ${b.tier}: ${b.tier ? TIERS[b.tier - 1].name : 'пустой участок'}</div>
+        <div class="desc">${next ? `Следующий: ${next.icon} ${next.name} — больше клиентов, выше цена` : 'Максимальный уровень!'}</div>${lvl(b.tier, 10)}</div>
         ${btn(c.ok, c.ok ? '' : c.code, c.ok ? c.cost : next?.cost ?? 0, 'data-buy="tier"')}</div>`);
+      for (const vid of VENUE_IDS) {
+        const d = VENUES[vid];
+        const lvl = b.venues[vid];
+        const c = checkVenue(b, vid);
+        const locked = lvl === 0 && !venueUnlocked(b, vid);
+        rows.push(`<div class="shop-row"><div class="ico">${d.icon}</div><div class="info"><div class="title">${d.name}${lvl ? ` ★${lvl}` : ''}</div>
+          <div class="desc">${lvl ? 'Расширить: больше клиентов и выше чек' : `Новый бизнес · $${d.price}/клиент`}${locked ? ` · нужен HQ ур. ${d.minTier} и предыдущий бизнес` : ''}</div>${lvl ? lvl_(lvl, ECONOMY.venueLevelMult.length) : ''}</div>
+          ${btn(c.ok, c.ok ? '' : c.code, venueCost(vid, lvl), `data-venue="${vid}"`)}</div>`);
+      }
       for (const id of STRUCTURE_IDS) {
         const d = STRUCTURES[id];
         const cs = checkStructure(b, id);
@@ -257,6 +277,7 @@ export class Hud implements HudSink {
     // The client only REQUESTS purchases; the server validates and applies.
     if (d.buy === 'tier') this.net.send({ t: C2S.BUILD_BUSINESS, kind: 'tier' });
     else if (d.struct) this.net.send({ t: C2S.BUILD_BUSINESS, kind: 'structure', id: d.struct as never });
+    else if (d.venue) this.net.send({ t: C2S.BUILD_BUSINESS, kind: 'venue', id: d.venue as never });
     else if (d.up) this.net.send({ t: C2S.BUY_UPGRADE, id: d.up as never });
     else if (d.hire) this.net.send({ t: C2S.HIRE_WORKER, id: d.hire as never });
     else if (d.mega) this.net.send({ t: C2S.BUILD_MEGA_MALL });

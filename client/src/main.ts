@@ -47,6 +47,7 @@ class App {
       pause: () => this.togglePause(),
     });
     this.game = new Game($('scene') as HTMLCanvasElement, this.net, this.audio, this.hud, $('floats'), $('joy-base'), $('joy-knob'));
+    this.game.onOpenPanel = (tab) => this.hud.openTab(tab);
     this.bindUi();
     this.bindNet();
     setInterval(() => this.hud.update(), 200);

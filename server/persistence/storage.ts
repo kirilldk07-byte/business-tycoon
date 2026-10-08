@@ -51,12 +51,16 @@ export class FileProfileStore implements ProfileStore {
     this.file = new JsonFile(path.join(dir, 'profiles.json'), {});
     this.data = this.file.read();
   }
-  get(id: string) { return this.data[id]; }
+  get(id: string) {
+    const r = this.data[id];
+    if (r && !r.profile.achievements) r.profile.achievements = []; // migrate old profiles
+    return r;
+  }
   create(name: string) {
     const secret = randomToken(16);
     const profile: PlayerProfile = {
       id: 'p_' + randomToken(8), name, wins: 0, losses: 0, coopWins: 0, rating: RATING.start,
-      coins: 0, hats: ['none', 'cap'], hat: 'cap', gamesPlayed: 0,
+      coins: 0, hats: ['none', 'cap'], hat: 'cap', gamesPlayed: 0, achievements: [],
     };
     const record = { profile, secretHash: hashSecret(secret) };
     this.data[profile.id] = record;

@@ -67,7 +67,11 @@ async function main() {
   for (const c of [A, B]) { const e = snap.p.find((p) => p[0] === c.id)!; c.pos = [e[1], e[2], e[3], e[4], 0]; }
   ok(true, 'co-op match started');
 
-  // Shared economy: B spends money that A sees on the same business
+  // Shared economy: A opens the kiosk, B spends from the same shared cash
+  A.send({ t: C2S.BUILD_BUSINESS, kind: 'tier' });
+  await B.wait(S2C.BUSINESS_UPDATE, (m) => m.cause === 'tier');
+  A.send({ t: C2S.DEV, cmd: 'addMoney', arg: 100 });
+  await A.wait(S2C.BUSINESS_UPDATE, (m) => m.cause === 'dev');
   B.send({ t: C2S.BUY_UPGRADE, id: 'capacity' });
   const up = await A.wait(S2C.BUSINESS_UPDATE, (m) => m.cause === 'upgrade:capacity');
   ok(up.by === B.id && up.b.id === 0, 'B upgrades the SHARED business, A sees it');
@@ -86,7 +90,7 @@ async function main() {
   // DELIVERY: unload all crates
   A.send({ t: C2S.DEV, cmd: 'triggerEvent', arg: 1 });
   const ev = await A.wait(S2C.EVENT_STATE, (m) => m.event?.kind === 'delivery');
-  ok(ev.event!.crates!.length === 6, 'DELIVERY ARRIVED: 6 crates');
+  ok(ev.event!.crates![0].length === 6, 'DELIVERY ARRIVED: 6 crates at the shared business');
   const crates = PLOT_LOCAL.crates.map((c) => plotToWorld(0, c.lx, c.lz));
   // Split crates between the two players
   const jobs = [A, B].map(async (c, k) => {
