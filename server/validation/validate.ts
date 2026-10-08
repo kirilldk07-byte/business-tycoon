@@ -22,7 +22,7 @@ export function validateClientMsg(m: any): m is ClientMsg {
     case C2S.JOIN_ROOM: return typeof m.code === 'string' && /^\d{6}$/.test(m.code);
     case C2S.RESUME: return isStr(m.token, 128);
     case C2S.QUICK_MATCH: case C2S.CANCEL_QUICK_MATCH: case C2S.PLAY_SOLO: case C2S.START_MATCH:
-    case C2S.BUILD_MEGA_MALL: case C2S.REMATCH: case C2S.LEAVE: case C2S.AD_REWARD: case C2S.GET_LEADERBOARD:
+    case C2S.BUILD_MEGA_MALL: case C2S.REMATCH: case C2S.LEAVE: case C2S.AD_REWARD: case C2S.AD_BOOST: case C2S.GET_LEADERBOARD:
       return true;
     case C2S.SET_MODE: return oneOf(MODES, m.mode) && m.mode !== 'solo';
     case C2S.PLAYER_READY: return typeof m.ready === 'boolean';

@@ -31,6 +31,7 @@ class Session implements Conn {
   room: Room | null = null;
   player: PlayerSlot | null = null;
   lastAdReward = 0;
+  lastAdBoost = 0;
   private buckets = Object.fromEntries(
     Object.entries(RATE_LIMITS).map(([k, v]) => [k, new TokenBucket(v.perSec, v.burst)]),
   ) as Record<Category, TokenBucket>;
@@ -202,6 +203,14 @@ export class GameServer {
       case C2S.EMOTE: room.emote(p, m.e); break;
       case C2S.REMATCH: r = room.rematch(p); break;
       case C2S.LEAVE: this.leaveCurrent(s); break;
+      case C2S.AD_BOOST: {
+        // Only solo can be boosted by ads: multiplayer matches stay fair.
+        if (room.mode !== 'solo') { r = { ok: false, code: ERR.NOT_ALLOWED, msg: 'Бонус за рекламу только в соло' }; break; }
+        if (Date.now() - s.lastAdBoost < 90_000) { r = { ok: false, code: ERR.RATE_LIMITED, msg: 'Бонус уже был недавно' }; break; }
+        s.lastAdBoost = Date.now();
+        r = room.adBoost(p);
+        break;
+      }
       case C2S.DEV:
         if (!this.opts.devTools) r = { ok: false, code: ERR.DEV_DISABLED, msg: 'Dev tools disabled' };
         else r = room.dev(p, m.cmd, m.arg);

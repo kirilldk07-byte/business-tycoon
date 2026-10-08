@@ -148,6 +148,13 @@ async function main() {
   }
   ok(spawns[bizA.id] === 1 && spawns[bizB.id] === 1 && (vip.event!.reward ?? 0) > 0, `VIP: one VIP per player, same flat reward $${vip.event!.reward}`);
 
+  // Rewarded-ad boosts are impossible in VS (pay-to-win protection)
+  A.send({ t: 'AD_BOOST' } as never);
+  await A.wait(S2C.ERROR, (m) => m.code === 'NOT_ALLOWED');
+  A.send({ t: C2S.AD_REWARD });
+  await A.wait(S2C.ERROR, (m) => m.code === 'NOT_ALLOWED');
+  ok(true, 'rewarded ads give NO bonus inside a VS match (AD_BOOST/AD_REWARD rejected)');
+
   // Spam protection on actions
   for (let i = 0; i < 60; i++) A.send({ t: C2S.BUY_UPGRADE, id: 'capacity' });
   await A.wait(S2C.ERROR, (m) => m.code === 'RATE_LIMITED');

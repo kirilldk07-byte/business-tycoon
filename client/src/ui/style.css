@@ -328,3 +328,4 @@ body.touch #panel { top: auto; bottom: 0; right: 0; left: 0; width: 100%; height
   #menu { gap: 8px; }
   #event-banner small, #tutorial small { display: none; }
 }
+.btn.small.yellow { --c: var(--yellow); --d: var(--yellow-d); color: var(--ink); text-shadow: none; }

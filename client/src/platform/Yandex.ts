@@ -26,6 +26,10 @@ export class Platform {
   lang = 'ru';
   private adOpen = false;
   onAdState: (open: boolean) => void = () => {};
+  /** Platform pause (ads, purchase window, tab switch, minimize). Multiplayer time keeps running on the server. */
+  onPlatformPause: (paused: boolean) => void = () => {};
+  private gameplayActive = false;
+  private wantGameplay = false;
 
   get available() { return !!this.ysdk; }
 
@@ -37,6 +41,11 @@ export class Platform {
       this.ysdk = await window.YaGames.init();
       this.lang = this.ysdk.environment?.i18n?.lang ?? 'ru';
       try { this.player = await this.ysdk.getPlayer(); } catch { this.player = null; }
+      // https://yandex.ru/dev/games/doc/ru/sdk/sdk-events — pause/resume events
+      try {
+        this.ysdk.on?.('game_api_pause', () => this.onPlatformPause(true));
+        this.ysdk.on?.('game_api_resume', () => this.onPlatformPause(false));
+      } catch { /* older SDK */ }
       console.info('[platform] Yandex SDK ready, lang =', this.lang);
     } catch (e) {
       console.warn('[platform] YaGames.init failed', e);
@@ -46,8 +55,19 @@ export class Platform {
 
   /** Tell the platform the game finished loading (required for moderation). */
   loadingReady() { this.ysdk?.features?.LoadingAPI?.ready(); }
-  gameplayStart() { this.ysdk?.features?.GameplayAPI?.start(); }
-  gameplayStop() { this.ysdk?.features?.GameplayAPI?.stop(); }
+  /** Gameplay markup; idempotent so start() isn't sent twice. */
+  gameplayStart() {
+    this.wantGameplay = true;
+    if (this.gameplayActive || this.adOpen) return;
+    this.gameplayActive = true;
+    this.ysdk?.features?.GameplayAPI?.start();
+  }
+  gameplayStop() {
+    this.wantGameplay = false;
+    if (!this.gameplayActive) return;
+    this.gameplayActive = false;
+    this.ysdk?.features?.GameplayAPI?.stop();
+  }
 
   playerName(): string | null {
     try {
@@ -100,7 +120,8 @@ export class Platform {
   private setAd(open: boolean) {
     if (this.adOpen === open) return;
     this.adOpen = open;
-    if (open) this.gameplayStop();
+    if (open && this.gameplayActive) { this.gameplayActive = false; this.ysdk?.features?.GameplayAPI?.stop(); }
+    if (!open && this.wantGameplay) this.gameplayStart();
     this.onAdState(open);
   }
 

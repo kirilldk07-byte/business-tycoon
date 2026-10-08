@@ -32,6 +32,8 @@ export const C2S = {
   BUY_COSMETIC: 'BUY_COSMETIC',
   SET_COSMETIC: 'SET_COSMETIC',
   AD_REWARD: 'AD_REWARD',
+  /** Solo only: rewarded ad → temporary production boost (never in VS/co-op). */
+  AD_BOOST: 'AD_BOOST',
   GET_LEADERBOARD: 'GET_LEADERBOARD',
   DEV: 'DEV',
 } as const;
@@ -136,6 +138,7 @@ export type ClientMsg =
   | { t: typeof C2S.BUY_COSMETIC; id: CosmeticId }
   | { t: typeof C2S.SET_COSMETIC; id: CosmeticId }
   | { t: typeof C2S.AD_REWARD }
+  | { t: typeof C2S.AD_BOOST }
   | { t: typeof C2S.GET_LEADERBOARD }
   | { t: typeof C2S.DEV; cmd: DevCmd; arg?: number };
 

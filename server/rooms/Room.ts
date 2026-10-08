@@ -474,6 +474,16 @@ export class Room {
     return fail(ERR.BAD_MESSAGE, 'Неизвестная цель');
   }
 
+  /** Solo-only rewarded boost (validated by caller): production x2 for 60 s. */
+  adBoost(p: PlayerSlot): Result {
+    const sim = this.actionBiz(p);
+    if (!sim || this.mode !== 'solo') return fail(ERR.NOT_ALLOWED, 'Недоступно');
+    sim.b.boostUntil = Math.max(sim.b.boostUntil, Date.now()) + 60_000;
+    this.bizUpdate(sim, 'adboost', p.id);
+    p.conn?.send({ t: S2C.TOAST, text: '📺 Спасибо! Производство x2 на 60 секунд', kind: 'good' });
+    return OK;
+  }
+
   emote(p: PlayerSlot, e: number) {
     this.broadcast({ t: S2C.EMOTE, id: p.id, e });
   }

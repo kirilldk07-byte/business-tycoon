@@ -72,6 +72,7 @@ class App {
     $('loading-text').textContent = 'Подключаем платформу…';
     await this.platform.init();
     this.platform.onAdState = (open) => this.audio.suspend('ad', open);
+    this.platform.onPlatformPause = (paused) => { this.audio.suspend('platform', paused); this.game.input.reset(); };
     // Cloud save (Yandex) restores the profile on another device of the same account.
     const cloud = await this.platform.cloudLoad();
     if (cloud?.profileId && cloud?.secret && !LocalStore.get().profileId) {
@@ -148,6 +149,16 @@ class App {
     $('set-sfx').onclick = () => { this.audio.setSfx(!this.audio.sfx); this.renderSettings(); };
     if (!navigator.share) $('btn-share').classList.add('hidden');
     this.bindDev();
+    $('btn-adboost').onclick = () => void this.watchAdForBoost();
+  }
+
+  /** Solo only — never offered in VS/co-op (server rejects it there as well). */
+  private async watchAdForBoost() {
+    if (this.room?.mode !== 'solo' || this.room.status !== 'playing') return;
+    this.audio.suspend('ad', true);
+    const ok = await this.platform.showRewarded();
+    this.audio.suspend('ad', false);
+    if (ok) this.net.send({ t: C2S.AD_BOOST });
   }
 
   private needOnline(): boolean {
@@ -358,6 +369,7 @@ class App {
       $('reconnect').classList.add('hidden');
       if (this.screen !== null && this.screen !== 'pause') this.show(null);
       if (prev?.status !== room.status && room.status === 'countdown') this.tutorial.reset();
+      $('btn-adboost').classList.toggle('hidden', room.mode !== 'solo');
       this.platform.gameplayStart();
       this.wasPlaying = true;
       this.endedShown = '';
@@ -597,7 +609,7 @@ class App {
   /** Dev mode only: technical connection details. */
   private devInfo() {
     if ($('dev').classList.contains('hidden')) return;
-    $('dev-info').textContent = `ws=${this.net.status} rtt=${Math.round(this.net.rtt)}ms off=${Math.round(this.net.offset)}ms fps=${this.game.fps} q=${this.game.quality.name}`;
+    $('dev-info').textContent = `ws=${this.net.status} rtt=${Math.round(this.net.rtt)}ms off=${Math.round(this.net.offset)}ms fps=${Math.round(this.game.fps)} q=${this.game.quality.name} calls=${this.game.renderer.info.render.calls} tris=${Math.round(this.game.renderer.info.render.triangles / 1000)}k`;
   }
 }
 
