@@ -27,10 +27,15 @@ export class LabelSprite {
   private ctx = this.canvas.getContext('2d')!;
   private tex: THREE.CanvasTexture;
   private last = '';
+  /** Logical size; the canvas itself is 2× for crisp text on high-DPR phones. */
+  private W: number;
+  private H: number;
   constructor(w = 256, h = 96, scale = 3) {
-    this.canvas.width = w; this.canvas.height = h;
+    this.W = w; this.H = h;
+    this.canvas.width = w * 2; this.canvas.height = h * 2;
     this.tex = new THREE.CanvasTexture(this.canvas);
     this.tex.colorSpace = THREE.SRGBColorSpace;
+    this.tex.anisotropy = 4;
     this.sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.tex, depthTest: false, transparent: true }));
     this.sprite.scale.set(scale, (scale * h) / w, 1);
     this.sprite.renderOrder = 10;
@@ -40,26 +45,29 @@ export class LabelSprite {
     if (key === this.last) return;
     this.last = key;
     const { ctx, canvas } = this;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.setTransform(2, 0, 0, 2, 0, 0);
+    const W = this.W, H = this.H;
     if (bg) {
       // Shrink-wrap the pill to the widest line.
       let maxW = 0;
       for (const l of lines) { ctx.font = `800 ${l.size}px system-ui, sans-serif`; maxW = Math.max(maxW, ctx.measureText(l.text).width); }
-      const w = Math.min(canvas.width - 8, maxW + 36);
+      const w = Math.min(W - 8, maxW + 36);
       ctx.fillStyle = bg;
       ctx.beginPath();
-      ctx.roundRect((canvas.width - w) / 2, 4, w, canvas.height - 8, 22);
+      ctx.roundRect((W - w) / 2, 4, w, H - 8, 22);
       ctx.fill();
     }
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     const total = lines.reduce((a, l) => a + l.size * 1.15, 0);
-    let y = canvas.height / 2 - total / 2;
+    let y = H / 2 - total / 2;
     for (const l of lines) {
       ctx.font = `800 ${l.size}px system-ui, -apple-system, Segoe UI, Roboto, sans-serif`;
       ctx.fillStyle = l.color;
       y += (l.size * 1.15) / 2;
-      ctx.fillText(l.text, canvas.width / 2, y);
+      ctx.fillText(l.text, W / 2, y);
       y += (l.size * 1.15) / 2;
     }
     this.tex.needsUpdate = true;

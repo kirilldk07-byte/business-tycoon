@@ -474,3 +474,5 @@ body.touch.panel-open #touch-buttons, body.touch.panel-open .hud-tr { visibility
   #event-banner small, #tutorial small { display: none; }
   .stat.income { height: calc(var(--pill-h) * .66); }
 }
+/* rewarded x2 boost: a small pill, not a big yellow block over the city */
+#btn-adboost.btn { min-height: 0; height: calc(var(--pill-h) * .8); padding: 0 10px; font-size: var(--fs-sub); border-radius: 999px; box-shadow: 0 2px 0 var(--yellow-d); width: auto; }

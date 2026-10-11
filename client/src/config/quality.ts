@@ -26,12 +26,34 @@ const PRESETS: Record<Exclude<QualityName, 'auto'>, Quality> = {
   high: { name: 'high', pixelRatio: 2, antialias: true, shadows: true, shadowMap: 2048, maxNpcs: 36, pedestrians: 26, cars: 14, clouds: 14, shadowRange: 44, particleScale: 1 },
 };
 
-/** AUTO: phones and weak CPUs start on low/medium; FPS watchdog can step down further. */
+/** GPU name via WEBGL_debug_renderer_info (Safari reports "Apple GPU"); '' if unavailable. */
+function gpuName(): string {
+  try {
+    const gl = document.createElement('canvas').getContext('webgl');
+    if (!gl) return '';
+    const ext = gl.getExtension('WEBGL_debug_renderer_info');
+    const name = String(ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER));
+    gl.getExtension('WEBGL_lose_context')?.loseContext();
+    return name;
+  } catch { return ''; }
+}
+
+/**
+ * AUTO: decide by the actual GPU, not by deviceMemory (iOS Safari doesn't expose it → every iPhone used to get LOW).
+ * Modern phone GPUs get sharp 2× rendering + shadows; the FPS watchdog (dynamic resolution → lower preset)
+ * still protects weak devices.
+ */
 function autoPreset(): Quality {
   const cores = navigator.hardwareConcurrency ?? 4;
   const mem = (navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 4;
-  if (isTouch) return cores >= 8 && mem >= 6 ? PRESETS.medium : PRESETS.low;
-  return cores >= 6 ? PRESETS.high : PRESETS.medium;
+  if (!isTouch) return cores >= 6 ? PRESETS.high : PRESETS.medium;
+  const gpu = gpuName();
+  const apple = /Apple/i.test(gpu);
+  const strong = apple || /Adreno \(TM\) (6[4-9]\d|[7-9]\d\d)|Mali-G(7[1-9]|[6-9]\d\d|[89]\d)|Immortalis|Xclipse/i.test(gpu);
+  // Apple GPUs are tile-based: MSAA is almost free there.
+  if (strong) return { ...PRESETS.medium, name: 'medium', pixelRatio: 2, antialias: apple, shadowMap: 2048, shadowRange: 36, pedestrians: 20 };
+  if (cores >= 6 || mem >= 4) return PRESETS.medium;
+  return PRESETS.low;
 }
 
 export function qualitySetting(): QualityName {
@@ -45,6 +67,7 @@ export function resolveQuality(name: QualityName = qualitySetting()): Quality {
 
 export function lowerQuality(q: Quality): Quality | null {
   if (q.name === 'high') return { ...PRESETS.medium, pixelRatio: Math.min(1.5, window.devicePixelRatio || 1) };
+  if (q.name === 'medium' && q.pixelRatio > 1.5) return { ...q, pixelRatio: 1.5, antialias: false, shadowMap: 1024 };
   if (q.name === 'medium') return { ...PRESETS.low };
   return null;
 }

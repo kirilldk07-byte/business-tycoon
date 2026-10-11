@@ -857,6 +857,7 @@ export class Game {
   renderScale = 1;
   private static readonly SCALES = [1, 0.9, 0.8, 0.75];
   private slowFor = 0;
+  private dtJitter = 0;
   private fastFor = 0;
 
   private setRenderScale(s: number) {
@@ -874,13 +875,17 @@ export class Game {
   private watchFps(dt: number) {
     const raw = dt >= 0.05 ? 20 : 1 / Math.max(dt, 0.001); // dt is clamped at 0.05 in frame()
     this.fps += (raw - this.fps) * 0.05;
+    this.dtJitter += (Math.abs(dt - 1 / Math.max(this.fps, 1)) - this.dtJitter) * 0.05;
     if (qualitySetting() !== 'auto' || !this.inMatch) return;
+    // A rock-steady ~30 FPS is a refresh cap (iPhone Low Power Mode, 30 Hz displays), not overload:
+    // dropping resolution would only make the picture blurry without gaining a single frame.
+    if (Math.abs(this.fps - 30) < 3 && this.dtJitter < 0.004) { this.slowFor = this.lowFpsFor = 0; return; }
     const S = Game.SCALES, i = S.indexOf(this.renderScale);
     this.slowFor = this.fps < 45 ? this.slowFor + dt : 0;
     this.fastFor = this.fps > 57 ? this.fastFor + dt : 0;
     if (this.slowFor > 4 && i < S.length - 1) { this.slowFor = 0; this.setRenderScale(S[i + 1]); }
     else if (this.fastFor > 20 && i > 0) { this.fastFor = 0; this.setRenderScale(S[i - 1]); }
-    this.lowFpsFor = this.fps < 30 && i === S.length - 1 ? this.lowFpsFor + dt : 0;
+    this.lowFpsFor = this.fps < 26 && i === S.length - 1 ? this.lowFpsFor + dt : 0;
     if (this.lowFpsFor > 6) {
       this.lowFpsFor = 0;
       const lower = lowerQuality(this.quality);
