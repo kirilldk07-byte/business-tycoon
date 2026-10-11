@@ -95,6 +95,9 @@ class App {
     document.addEventListener('contextmenu', (e) => { if ((e.target as HTMLElement)?.tagName !== 'INPUT') e.preventDefault(); });
     window.addEventListener('blur', () => this.audio.suspend('blur', true));
     window.addEventListener('focus', () => this.audio.suspend('blur', false));
+    if (this.platform.available) document.querySelector('[data-act="copy-link"]')?.classList.add('hidden');
+    $('offline-retry').onclick = () => location.reload();
+    $('reconnect-reload').onclick = () => location.reload();
     this.platform.loadingReady();
     $('loading').classList.remove('show');
     this.show('menu');
@@ -122,6 +125,19 @@ class App {
     if (s === 'leaderboard') this.loadLeaderboard();
     if (s === 'settings') this.renderSettings();
     if (s === 'join') { this.setJoinError(''); setTimeout(() => $('code-input').focus(), 60); }
+    // GameplayAPI: opening the in-match menu = gameplay stopped, closing it = resumed (Game Ready rules).
+    const live = this.room?.status === 'playing' || this.room?.status === 'countdown';
+    if (live && s === 'pause') this.platform.gameplayStop();
+    else if (live && s === null) this.platform.gameplayStart();
+    if (s !== 'pause') this.disarmLeave();
+  }
+
+  /** In-game two-step confirmation (no window.confirm — modals may be blocked inside the Yandex iframe). */
+  private leaveArmedUntil = 0;
+  private disarmLeave() {
+    this.leaveArmedUntil = 0;
+    const b = document.querySelector('[data-act="leave-match"]');
+    if (b) b.textContent = 'Покинуть матч';
   }
 
   private bindUi() {
@@ -218,9 +234,13 @@ class App {
         break;
       }
       case 'copy': if (r) copyText(r.code).then(() => alertToast('Код скопирован ✓')); break;
-      case 'copy-link': if (r) copyText(this.inviteUrl(r.code)).then(() => alertToast('Ссылка скопирована ✓')); break;
+      case 'copy-link': if (r && !this.platform.available) copyText(this.inviteUrl(r.code)).then(() => alertToast('Ссылка скопирована ✓')); break;
       case 'share':
-        if (r && navigator.share) void navigator.share({ title: 'Business Tycoon', text: `Го играть в Business Tycoon! Код комнаты: ${r.code}`, url: this.inviteUrl(r.code) }).catch(() => {});
+        if (r && navigator.share) {
+          const text = `Го играть в Business Tycoon! Код комнаты: ${r.code}`;
+          // On Yandex Games only the room code is shared (the iframe URL is not a public game link).
+          void navigator.share(this.platform.available ? { title: 'Business Tycoon', text } : { title: 'Business Tycoon', text, url: this.inviteUrl(r.code) }).catch(() => {});
+        }
         break;
       case 'ready': {
         const me = r?.players.find((p) => p.id === this.net.playerId);
@@ -235,7 +255,14 @@ class App {
       case 'leave': this.leaveRoom(); break;
       case 'leave-match': {
         const vsRunning = r?.mode === 'vs' && (r.status === 'playing' || r.status === 'countdown');
-        if (vsRunning && !confirm('Выход из VS матча засчитывается как поражение. Выйти?')) return;
+        if (vsRunning && performance.now() > this.leaveArmedUntil) {
+          if (this.screen !== 'pause') this.togglePause();
+          this.leaveArmedUntil = performance.now() + 5000;
+          $('leave-warn').textContent = 'Выход из VS матча = поражение. Нажми ещё раз, чтобы выйти.';
+          document.querySelector('[data-act="leave-match"]')!.textContent = 'Да, выйти (поражение)';
+          return;
+        }
+        this.disarmLeave();
         this.leaveRoom();
         break;
       }
@@ -311,6 +338,7 @@ class App {
     this.hud.netStatus(inMatch && s === 'reconnecting' ? `RECONNECTING… · попытка ${Math.max(1, this.net.attempts)}` : null);
     $('reconnect-attempt').textContent = `Attempt ${Math.max(1, this.net.attempts)}`;
     if (s !== 'online' && inMatch) this.wasDisconnected = true;
+    $('offline-card').classList.toggle('hidden', !(s === 'offline' && this.net.attempts >= 2));
     if (s === 'online') {
       if (this.wasDisconnected) { this.hud.netStatus(null); this.hud.toast('✅ CONNECTED', 'good'); this.audio.play('reconnect'); }
       this.wasDisconnected = false;
@@ -324,6 +352,7 @@ class App {
     n.onAttempt(() => {
       $('reconnect-attempt').textContent = `Attempt ${n.attempts}`;
       if (n.status === 'reconnecting') this.hud.netStatus(`RECONNECTING… · попытка ${n.attempts}`);
+      $('offline-card').classList.toggle('hidden', !(n.status === 'offline' && n.attempts >= 2));
     });
     n.on(S2C.WELCOME, () => this.renderMenu());
     n.on(S2C.PROFILE, (m) => {

@@ -87,9 +87,17 @@ export class GameServer {
     this.wss.handleUpgrade(req, socket, head, (ws) => this.wss.emit('connection', ws, req));
   }
 
+  /**
+   * Client IP for per-IP limits. Proxy headers are trusted ONLY from a local reverse proxy / tunnel
+   * (cloudflared, nginx on the same host) — otherwise anyone could spoof X-Forwarded-For to dodge the limit.
+   */
   private clientIp(req: IncomingMessage) {
+    const remote = req.socket.remoteAddress || '?';
+    const local = remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1';
+    if (!local) return remote;
+    const cf = req.headers['cf-connecting-ip'] as string | undefined;
     const fwd = (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0].trim();
-    return fwd || req.socket.remoteAddress || '?';
+    return cf?.trim() || fwd || remote;
   }
 
   private onConnection(ws: WebSocket, req: IncomingMessage) {

@@ -37,6 +37,11 @@
         <button class="round-ico" data-act="settings" title="Settings" aria-label="Settings">⚙️</button>
       </div>
       <div class="profile-line" id="profile-line"></div>
+      <div class="offline-card hidden" id="offline-card">
+        <b>Не удаётся подключиться к игровому серверу</b>
+        <span>Проверь интернет-соединение. Мы пробуем переподключиться автоматически.</span>
+        <button class="btn small" id="offline-retry">🔄 Перезагрузить</button>
+      </div>
     </div>
   </div>
 
@@ -217,7 +222,8 @@
       <h2>CONNECTION LOST</h2>
       <p class="big-muted">RECONNECTING…</p>
       <p class="muted small" id="reconnect-attempt">Attempt 1</p>
-      <p class="muted small">Матч продолжается — тебя ждут до 45 секунд.</p>
+      <p class="muted small">Матч продолжается — тебя ждут до 45 секунд. Проверь интернет-соединение.</p>
+      <button class="btn small ghost" id="reconnect-reload">🔄 Перезагрузить</button>
     </div>
   </div>
 

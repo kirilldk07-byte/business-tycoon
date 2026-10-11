@@ -476,3 +476,5 @@ body.touch.panel-open #touch-buttons, body.touch.panel-open .hud-tr { visibility
 }
 /* rewarded x2 boost: a small pill, not a big yellow block over the city */
 #btn-adboost.btn { min-height: 0; height: calc(var(--pill-h) * .8); padding: 0 10px; font-size: var(--fs-sub); border-radius: 999px; box-shadow: 0 2px 0 var(--yellow-d); width: auto; }
+.offline-card { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px 14px; border-radius: 16px; background: #fee2e2; color: var(--red-d); text-align: center; font-weight: 700; font-size: 14px; max-width: 420px; }
+.offline-card b { font-weight: 900; }

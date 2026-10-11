@@ -248,3 +248,17 @@ Production URL: **https://kirilldk07-byte.github.io/business-tycoon/** (серв
 - [ ] ☰ → Business / Emotes / Settings / Leave
 - [ ] Multiplayer VS with a second device (VS card, lead arrow, rival tag)
 - [ ] Reconnect: toggle airplane mode for ~5 s → "RECONNECTING…" pill → "CONNECTED"
+
+## Публикация на Яндекс Играх
+
+**Способ:** ZIP-архив (клиент) + внешний backend по `wss://` (сервер матчей). iframe не нужен.
+
+1. Backend на **постоянном домене** с TLS (CSP-вкладка консоли принимает только имя хоста: без IP, порта и пути; протокол по умолчанию https/wss).
+2. `VITE_WS_URL=wss://<домен>/ws bash scripts/pack-yandex.sh` → `dist/yandex-game.zip`
+   (скрипт сам проверяет: wss, домен вместо IP, без порта, `index.html` в корне, ASCII-имена, ≤ 100 МБ, нет localhost/IP/секретов, добавляет `<script src="/sdk.js">`).
+3. Консоль разработчика → игра → **Общее → Архив**: загрузить ZIP. **CSP**: добавить хост backend'а с причиной «мультиплеерный сервер матчей (WebSocket)».
+4. Язык: только **ru** (тексты игры на русском).
+5. Черновик: проверить на телефоне и ПК — LoadingAPI.ready после меню, GameplayAPI start/stop (матч, меню, реклама), звук гаснет при сворачивании.
+6. После первого запуска черновика можно включить на сервере `ALLOWED_ORIGINS` (origin игры виден в логе подключений) — сейчас сервер принимает любые Origin.
+
+SDK-интеграция (`client/src/platform/Yandex.ts`): `YaGames.init`, `LoadingAPI.ready`, `GameplayAPI.start/stop` (матч; меню паузы; реклама), события `game_api_pause/resume` (звук + ввод), облачное сохранение профиля (`player.setData/getData`), лидерборд `ysdk.leaderboards`, реклама только между матчами / rewarded в соло. Без SDK игра работает автономно.
