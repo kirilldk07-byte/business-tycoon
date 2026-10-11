@@ -27,9 +27,21 @@ export class CameraRig {
   static readonly MIN_PITCH = 0.12;
   static readonly MAX_PITCH = 1.2;
 
-  setAspect(portrait: boolean) {
-    this.baseFov = portrait ? 68 : 55;
-    this.lookLift = portrait ? 3.4 : 2.4;
+  /** Distance multiplier from the aspect preset (user zoom stays in wantDist). */
+  private distMul = 1;
+
+  /**
+   * Camera preset from the viewport aspect — distance, FOV and aim height together, not just a wider FOV:
+   *  - portrait (≈0.46): further back, aim higher → hero in the lower part of the frame, more world ahead/above;
+   *  - desktop 16:9: the classic framing;
+   *  - wide landscape phone (≈2.2): a little closer and tighter → cinematic, hero + business + street.
+   */
+  setViewport(w: number, h: number) {
+    const a = w / Math.max(1, h);
+    const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+    this.baseFov = clamp(64 - 6 * a, 50, 60);
+    this.distMul = clamp(1.45 - 0.25 * a, 0.9, 1.3);
+    this.lookLift = clamp(4.3 - a, 2.2, 3.9);
   }
 
   rotate(dx: number, dy: number, zoom: number) {
@@ -47,7 +59,7 @@ export class CameraRig {
 
   snap(target: THREE.Vector3) {
     this.pivot.copy(target).add(new THREE.Vector3(0, 1.8, 0));
-    this.dist = this.wantDist;
+    this.dist = this.wantDist * this.distMul;
     this.update(1, target, 0, []);
   }
 
@@ -70,9 +82,10 @@ export class CameraRig {
       Math.cos(this.yaw) * Math.cos(this.pitch),
     );
     // Collision: shorten the arm to the first hit (+ margin)
-    let allowed = this.wantDist;
+    const want = this.wantDist * this.distMul;
+    let allowed = want;
     for (const b of colliders) {
-      const t = rayAabb(this.pivot, dir, b, this.wantDist);
+      const t = rayAabb(this.pivot, dir, b, want);
       if (t !== null && t < allowed) allowed = Math.max(2.2, t - 0.7);
     }
     // Pull in fast (avoid clipping), ease out slowly.

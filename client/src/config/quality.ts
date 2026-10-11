@@ -13,12 +13,17 @@ export interface Quality {
   pedestrians: number;
   cars: number;
   clouds: number;
+  /** Half-size (m) of the sun's shadow box that follows the player: smaller = sharper, cheaper. */
+  shadowRange: number;
+  /** Particle count multiplier (effects never cover the screen on weak phones). */
+  particleScale: number;
 }
 
 const PRESETS: Record<Exclude<QualityName, 'auto'>, Quality> = {
-  low: { name: 'low', pixelRatio: 1, antialias: false, shadows: false, shadowMap: 512, maxNpcs: 14, pedestrians: 8, cars: 6, clouds: 6 },
-  medium: { name: 'medium', pixelRatio: 1.5, antialias: false, shadows: true, shadowMap: 1024, maxNpcs: 24, pedestrians: 16, cars: 10, clouds: 10 },
-  high: { name: 'high', pixelRatio: 2, antialias: true, shadows: true, shadowMap: 2048, maxNpcs: 36, pedestrians: 26, cars: 14, clouds: 14 },
+  // DPR is capped per preset (a phone may report 3 — rendering 3× pixels is never worth it).
+  low: { name: 'low', pixelRatio: 1, antialias: false, shadows: false, shadowMap: 512, maxNpcs: 14, pedestrians: 8, cars: 6, clouds: 6, shadowRange: 26, particleScale: 0.5 },
+  medium: { name: 'medium', pixelRatio: 1.5, antialias: false, shadows: true, shadowMap: 1024, maxNpcs: 24, pedestrians: 16, cars: 10, clouds: 10, shadowRange: 32, particleScale: 0.75 },
+  high: { name: 'high', pixelRatio: 2, antialias: true, shadows: true, shadowMap: 2048, maxNpcs: 36, pedestrians: 26, cars: 14, clouds: 14, shadowRange: 44, particleScale: 1 },
 };
 
 /** AUTO: phones and weak CPUs start on low/medium; FPS watchdog can step down further. */

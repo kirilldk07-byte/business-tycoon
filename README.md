@@ -218,3 +218,33 @@ Production URL: **https://kirilldk07-byte.github.io/business-tycoon/** (серв
 - Профиль гостя привязан к устройству (id+secret в localStorage и в облачном сохранении Яндекса для авторизованных). Подпись Яндекса на сервере ещё не проверяется.
 - Награда за rewarded-рекламу не верифицируется сервером (поэтому выдаёт только косметические монеты и не работает внутри VS).
 - Один инстанс сервера; горизонтальное масштабирование — через Redis RoomStore + sticky routing.
+
+## Mobile-first HUD, camera & graphics (2026-10-11)
+
+- **Gameplay safe zone**: no permanent UI in the central ~60%×50% of the screen. HUD lives on the edges only
+  (`client/src/ui/style.css`, section *RESPONSIVE HUD*): sizes via `clamp()`/`vmin`, safe-area insets, separate
+  **portrait** layout (VS row on top, cash + income under it) and **landscape** (cash top-left, VS centre, ☰ top-right).
+- **☰ menu**: Business, Emotes, Settings (graphics/sound), Fullscreen (if available), Leave match.
+- **Contextual controls**: INTERACT appears only next to something usable; JUMP fixed bottom-right; business shortcut small.
+  Floating joystick limited to the lower-left zone; touch targets larger than visuals. Multi-touch: joystick + camera + jump.
+- **Events/notifications**: 2 s detail card when an event starts, then a tiny chip (icon · seconds · key number).
+  Toasts: 1–3 at once by screen size, ~1.9 s. Lead change = small toast. Connection: a dot; "RECONNECTING…" pill only on problems.
+- **Floating text**: money already aggregated per spot; at most 2 (small phones) / 3 / 4 (desktop) labels on screen.
+- **Camera presets by aspect ratio** (`CameraRig.setViewport`): distance, FOV and aim height together — portrait further back
+  with the hero in the lower part of the frame, wide landscape closer/tighter. Orientation change re-applies without reload.
+- **Graphics**: Neutral tone mapping, retuned hemisphere + warm sun, shadow box follows the player (sharper, texel-snapped),
+  blob contact shadows for all NPCs (1 draw call) and characters, thinner player ring.
+- **Performance**: presets AUTO/LOW/MEDIUM/HIGH with capped DPR (1 / 1.5 / 2), shadow range and particle scale per preset;
+  AUTO adds dynamic resolution (1 → 0.9 → 0.8 → 0.75 with hysteresis) before dropping a preset.
+  Measured in a match (headless): ~70–80 draw calls, ~44K triangles, ~300–400 DOM nodes.
+
+### Real-device checklist
+- [ ] PORTRAIT: HUD on edges, hero/business visible, joystick + jump reachable
+- [ ] LANDSCAPE: same; nothing under the notch / home indicator
+- [ ] Rotation both ways mid-match: no reload, match + position kept
+- [ ] Movement (floating joystick), camera swipe on the right, pinch zoom
+- [ ] Jump while moving and turning the camera (3 fingers)
+- [ ] INTERACT appears at a pad / counter / crate and buys/serves
+- [ ] ☰ → Business / Emotes / Settings / Leave
+- [ ] Multiplayer VS with a second device (VS card, lead arrow, rival tag)
+- [ ] Reconnect: toggle airplane mode for ~5 s → "RECONNECTING…" pill → "CONNECTED"

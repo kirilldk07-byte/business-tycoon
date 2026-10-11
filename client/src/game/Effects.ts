@@ -5,7 +5,9 @@ import * as THREE from 'three';
 interface Particle { pos: THREE.Vector3; vel: THREE.Vector3; life: number; max: number; color: THREE.Color; size: number; spin: number; rot: number; gravity: number }
 
 const MAX = 600;
-const FLOAT_POOL = 14; // hard cap on simultaneous floating labels — the game stays readable
+const FLOAT_POOL = 14; // DOM elements ever created
+/** Simultaneous labels on screen: 2 on small phones, 3 on phones/tablets, 4 on desktop. */
+const floatCap = () => { const m = Math.min(innerWidth, innerHeight); return m < 420 ? 2 : m < 800 ? 3 : 4; };
 
 export class Effects {
   private mesh: THREE.InstancedMesh;
@@ -27,7 +29,11 @@ export class Effects {
     this.floatLayer = layer;
   }
 
+  /** From the graphics preset: fewer particles on weak devices. */
+  particleScale = 1;
+
   burst(at: THREE.Vector3, kind: 'coins' | 'dust' | 'confetti' | 'sparkle' | 'smoke', n = 12) {
+    n = Math.max(1, Math.round(n * this.particleScale));
     for (let i = 0; i < n && this.parts.length < MAX; i++) {
       const p: Particle = {
         pos: at.clone(), vel: new THREE.Vector3(), life: 0, max: 1, color: new THREE.Color(0xffffff), size: 0.2, spin: (Math.random() - 0.5) * 10, rot: 0, gravity: 9,
@@ -78,7 +84,8 @@ export class Effects {
 
   /** Pooled DOM labels: at most POOL elements ever exist; oldest is recycled. */
   floatText(at: THREE.Vector3, text: string, cls = 'money') {
-    let el = this.pool.pop();
+    // over the cap: recycle the oldest label instead of stacking a new one
+    let el = this.floats.length >= floatCap() ? this.floats.shift()!.el : this.pool.pop();
     if (!el) {
       if (this.floats.length >= FLOAT_POOL) { const old = this.floats.shift()!; el = old.el; }
       else { el = document.createElement('div'); this.floatLayer.appendChild(el); }

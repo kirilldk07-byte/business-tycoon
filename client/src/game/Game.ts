@@ -110,13 +110,15 @@ export class Game {
     this.renderer.shadowMap.enabled = q.shadows;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
+    // Neutral tone mapping keeps the stylized palette saturated (ACES greyed it out) without clipping.
+    this.renderer.toneMapping = THREE.NeutralToneMapping;
+    this.renderer.toneMappingExposure = 1.0;
     this.camera = new THREE.PerspectiveCamera(55, 1, 0.5, 700);
     this.world = new World(this.scene, q);
     this.rig = new CameraRig(this.camera);
-    this.rig.wantDist = isTouch ? 18 : 16;
+    this.rig.wantDist = 16; // aspect preset (CameraRig.setViewport) scales it per screen
     this.effects = new Effects(this.scene, this.camera, floatLayer);
+    this.effects.particleScale = q.particleScale;
     this.input = new Input(canvas, joyBase, joyKnob);
     this.input.onKey = (code) => {
       const idx = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5'].indexOf(code);
@@ -124,6 +126,9 @@ export class Game {
     };
     this.resize();
     window.addEventListener('resize', () => this.resize());
+    // Rotation / mobile browser bars: the visual viewport changes without always firing window resize.
+    window.visualViewport?.addEventListener('resize', () => this.resize());
+    window.addEventListener('orientationchange', () => setTimeout(() => this.resize(), 120));
     this.bindNet();
     this.startShowcase();
     this.renderer.setAnimationLoop(() => this.frame());
@@ -131,9 +136,11 @@ export class Game {
 
   private resize() {
     const w = window.innerWidth, h = window.innerHeight;
+    if (w === this.lastW && h === this.lastH && this.renderer.getPixelRatio() === this.appliedDpr) return;
+    this.lastW = w; this.lastH = h; this.appliedDpr = this.renderer.getPixelRatio();
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
-    this.rig?.setAspect(w < h);
+    this.rig?.setViewport(w, h);
     this.camera.updateProjectionMatrix();
   }
 
@@ -549,6 +556,7 @@ export class Game {
     this.elapsed += dt;
     const serverNow = this.net.serverNow();
     this.world.update(dt, this.elapsed, this.camera.position);
+    this.world.followShadow(this.inMatch && this.me ? this.myPos : this.camera.position);
 
     if (this.inMatch && this.me && this.room) {
       this.updateLocal(dt);
@@ -746,6 +754,7 @@ export class Game {
       if (!ch) continue;
       const l = label(p);
       ch.setTag(l.name, p.id === this.myId ? '' : l.money, hex(p.color)); // own money is already in the HUD
+      ch.showTag(p.id !== this.myId);
     }
   }
 
@@ -823,10 +832,13 @@ export class Game {
 
   fps = 60;
   private lowFpsFor = 0;
+  private lastW = 0;
+  private lastH = 0;
+  private appliedDpr = 0;
 
   applyQuality(q: Quality) {
     this.quality = q;
-    this.renderer.setPixelRatio(q.pixelRatio);
+    this.renderer.setPixelRatio(q.pixelRatio * this.renderScale);
     this.renderer.shadowMap.enabled = q.shadows;
     this.world.sun.castShadow = q.shadows;
     if (this.world.sun.shadow.mapSize.x !== q.shadowMap) {
@@ -834,16 +846,41 @@ export class Game {
       this.world.sun.shadow.map?.dispose();
       this.world.sun.shadow.map = null;
     }
+    this.world.setShadowRange(q.shadowRange);
+    this.effects.particleScale = q.particleScale;
     this.scene.traverse((o) => { const m = (o as THREE.Mesh).material as THREE.Material | undefined; if (m) m.needsUpdate = true; });
     for (const v of this.views.values()) v.customers.maxVisible = q.maxNpcs;
     this.resize();
   }
 
-  /** AUTO quality: step down if the device can't hold ~30 FPS. */
+  /** Dynamic resolution step (multiplies the preset's capped DPR). */
+  renderScale = 1;
+  private static readonly SCALES = [1, 0.9, 0.8, 0.75];
+  private slowFor = 0;
+  private fastFor = 0;
+
+  private setRenderScale(s: number) {
+    this.renderScale = s;
+    this.renderer.setPixelRatio(this.quality.pixelRatio * s);
+    this.resize();
+    console.info('[quality] render scale', s);
+  }
+
+  /**
+   * AUTO quality, two levels, all with hysteresis (no flicker):
+   *  1. dynamic resolution — FPS < 45 for 4 s → next lower render scale; > 57 for 20 s → one step back up;
+   *  2. if already at the lowest scale and FPS < 30 for 6 s → lower the whole preset.
+   */
   private watchFps(dt: number) {
-    this.fps += (1 / Math.max(dt, 0.001) - this.fps) * 0.05;
+    const raw = dt >= 0.05 ? 20 : 1 / Math.max(dt, 0.001); // dt is clamped at 0.05 in frame()
+    this.fps += (raw - this.fps) * 0.05;
     if (qualitySetting() !== 'auto' || !this.inMatch) return;
-    this.lowFpsFor = this.fps < 30 ? this.lowFpsFor + dt : 0;
+    const S = Game.SCALES, i = S.indexOf(this.renderScale);
+    this.slowFor = this.fps < 45 ? this.slowFor + dt : 0;
+    this.fastFor = this.fps > 57 ? this.fastFor + dt : 0;
+    if (this.slowFor > 4 && i < S.length - 1) { this.slowFor = 0; this.setRenderScale(S[i + 1]); }
+    else if (this.fastFor > 20 && i > 0) { this.fastFor = 0; this.setRenderScale(S[i - 1]); }
+    this.lowFpsFor = this.fps < 30 && i === S.length - 1 ? this.lowFpsFor + dt : 0;
     if (this.lowFpsFor > 6) {
       this.lowFpsFor = 0;
       const lower = lowerQuality(this.quality);

@@ -19,6 +19,7 @@ export class Input {
 
   private joyId: number | null = null;
   private joyCenter = { x: 0, y: 0 };
+  private joyMax = 42;
   private camTouchId: number | null = null;
   private camLast = { x: 0, y: 0 };
   private pinchDist = 0;
@@ -51,11 +52,18 @@ export class Input {
     const opts = { passive: false } as AddEventListenerOptions;
     this.canvas.addEventListener('touchstart', (e) => {
       for (const t of Array.from(e.changedTouches)) {
-        if (t.clientX < window.innerWidth * 0.42 && this.joyId === null) {
+        // Floating joystick: only the lower-left zone (never the centre, never the HUD at the top).
+        const W = window.innerWidth, H = window.innerHeight;
+        const inZone = t.clientX < W * (W < H ? 0.5 : 0.42) && t.clientY > H * (W < H ? 0.45 : 0.32);
+        if (inZone && this.joyId === null) {
+          const home = this.joyBase.getBoundingClientRect();
+          const size = home.width || 100;
+          this.joyMax = size * 0.42;
+          const m = size / 2 + 4;
+          const cx = Math.min(Math.max(t.clientX, m), W * 0.5), cy = Math.min(Math.max(t.clientY, m), H - m);
           this.joyId = t.identifier;
-          this.joyCenter = { x: t.clientX, y: t.clientY };
-          this.joyBase.style.left = `${t.clientX}px`;
-          this.joyBase.style.top = `${t.clientY}px`;
+          this.joyCenter = { x: cx, y: cy };
+          this.joyBase.style.transform = `translate(${cx - (home.left + size / 2)}px, ${cy - (home.top + size / 2)}px)`;
           this.joyBase.classList.add('active');
           this.updateJoy(t.clientX, t.clientY);
         } else if (this.camTouchId === null) {
@@ -72,8 +80,9 @@ export class Input {
       for (const t of Array.from(e.changedTouches)) {
         if (t.identifier === this.joyId) this.updateJoy(t.clientX, t.clientY);
         else if (t.identifier === this.camTouchId) {
-          this.camDX += (t.clientX - this.camLast.x) * 1.3;
-          this.camDY += (t.clientY - this.camLast.y) * 1.3;
+          // clamp per-event spikes (dropped frames) — no camera jerks
+          this.camDX += Math.max(-80, Math.min(80, t.clientX - this.camLast.x)) * 1.3;
+          this.camDY += Math.max(-80, Math.min(80, t.clientY - this.camLast.y)) * 1.3;
           this.camLast = { x: t.clientX, y: t.clientY };
         }
       }
@@ -91,8 +100,7 @@ export class Input {
           this.moveX = this.moveY = 0;
           this.joyKnob.style.transform = 'translate(-50%, -50%)';
           this.joyBase.classList.remove('active');
-          this.joyBase.style.left = '';
-          this.joyBase.style.top = '';
+          this.joyBase.style.transform = '';
         }
         if (t.identifier === this.camTouchId) this.camTouchId = null;
       }
@@ -103,13 +111,15 @@ export class Input {
   }
 
   private updateJoy(x: number, y: number) {
-    const max = 55;
+    const max = this.joyMax;
     let dx = x - this.joyCenter.x, dy = y - this.joyCenter.y;
     const d = Math.hypot(dx, dy);
     if (d > max) { dx = (dx / d) * max; dy = (dy / d) * max; }
     this.joyKnob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
-    this.moveX = dx / max;
-    this.moveY = -dy / max;
+    // small dead zone so a resting thumb doesn't drift the hero
+    const m = Math.hypot(dx, dy) / max, k = m < 0.12 ? 0 : (m - 0.12) / 0.88 / (m || 1);
+    this.moveX = (dx / max) * k;
+    this.moveY = (-dy / max) * k;
   }
 
   /** Combined movement vector (keyboard overrides when used). */

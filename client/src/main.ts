@@ -9,6 +9,7 @@ import { Game } from './game/Game';
 import { Net, type NetStatus } from './multiplayer/Net';
 import { LocalStore } from './platform/LocalStore';
 import { Platform } from './platform/Yandex';
+import { hydrateIcons } from './ui/icons';
 import { Hud, esc } from './ui/Hud';
 import { Tutorial } from './ui/Tutorial';
 
@@ -60,7 +61,9 @@ class App {
       interact: () => this.game.input.pressInteract(),
       jump: () => this.game.input.pressJump(),
       pause: () => this.togglePause(),
+      leave: () => this.onAction('leave-match'),
     });
+    hydrateIcons();
     this.game = new Game($('scene') as HTMLCanvasElement, this.net, this.audio, this.hud, $('floats'), $('joy-base'), $('joy-knob'));
     this.game.onOpenPanel = (tab) => this.hud.openTab(tab);
     this.bindUi();
@@ -145,12 +148,13 @@ class App {
       if (code.value.length === 6) this.onAction('connect'); // auto-submit
     });
     code.addEventListener('keydown', (e) => { if (e.key === 'Enter') this.onAction('connect'); });
-    $('quality-seg').addEventListener('click', (e) => {
+    for (const id of ['quality-seg', 'pause-quality']) $(id).addEventListener('click', (e) => {
       const q = (e.target as HTMLElement).closest('button')?.dataset.q as QualityName | undefined;
       if (!q) return;
       LocalStore.set({ quality: q });
       this.game.applyQuality(resolveQuality(q));
       this.renderSettings();
+      this.renderPause();
     });
     $('set-music').onclick = () => { this.audio.setMusic(!this.audio.music); this.renderSettings(); };
     $('set-sfx').onclick = () => { this.audio.setSfx(!this.audio.sfx); this.renderSettings(); };
@@ -277,6 +281,8 @@ class App {
   }
 
   private renderPause() {
+    const q = qualitySetting();
+    for (const b of $('pause-quality').querySelectorAll('button')) b.classList.toggle('on', (b as HTMLElement).dataset.q === q);
     $('pause-music').classList.toggle('off', !this.audio.music);
     $('pause-sfx').classList.toggle('off', !this.audio.sfx);
   }
@@ -300,11 +306,13 @@ class App {
     chip.querySelector('span')!.textContent = text;
     this.hud.setConnection(cls, s === 'online' ? `${Math.round(this.net.rtt) || '—'} ms` : text);
     const inMatch = !!this.room && this.room.status !== 'lobby' && this.room.status !== 'ended';
-    $('reconnect').classList.toggle('hidden', s === 'online' || !inMatch);
+    // Short reconnects: a compact pill, the match stays visible. Full overlay only when the connection is really lost.
+    $('reconnect').classList.toggle('hidden', s !== 'offline' || !inMatch);
+    this.hud.netStatus(inMatch && s === 'reconnecting' ? `RECONNECTING… · попытка ${Math.max(1, this.net.attempts)}` : null);
     $('reconnect-attempt').textContent = `Attempt ${Math.max(1, this.net.attempts)}`;
     if (s !== 'online' && inMatch) this.wasDisconnected = true;
     if (s === 'online') {
-      if (this.wasDisconnected) { this.hud.toast('✅ CONNECTED!', 'good'); this.audio.play('reconnect'); }
+      if (this.wasDisconnected) { this.hud.netStatus(null); this.hud.toast('✅ CONNECTED', 'good'); this.audio.play('reconnect'); }
       this.wasDisconnected = false;
       this.renderMenu();
     }
@@ -313,7 +321,10 @@ class App {
   private bindNet() {
     const n = this.net;
     n.onStatus((s) => this.onNetStatus(s));
-    n.onAttempt(() => { $('reconnect-attempt').textContent = `Attempt ${n.attempts}`; });
+    n.onAttempt(() => {
+      $('reconnect-attempt').textContent = `Attempt ${n.attempts}`;
+      if (n.status === 'reconnecting') this.hud.netStatus(`RECONNECTING… · попытка ${n.attempts}`);
+    });
     n.on(S2C.WELCOME, () => this.renderMenu());
     n.on(S2C.PROFILE, (m) => {
       this.renderMenu();

@@ -25,7 +25,11 @@ export interface HudCtx {
   interact: () => void;
   jump: () => void;
   pause: () => void;
+  leave: () => void;
 }
+
+/** Few simultaneous toasts: 1 on small phones, 2 on phones, 3 on large screens. */
+const toastCap = () => (Math.min(innerWidth, innerHeight) < 400 ? 1 : Math.min(innerWidth, innerHeight) < 700 ? 2 : 3);
 
 /** In-match UI: compact VS card, team goal, prompts, events, toasts, emotes, business panel. */
 export class Hud implements HudSink {
@@ -38,6 +42,7 @@ export class Hud implements HudSink {
   private leader: 'you' | 'opp' | null = null;
   private lastLeadBanner = 0;
   private emoteCdUntil = 0;
+  private eventBannerT = 0;
 
   constructor(private net: Net, private audio: AudioManager, private ctx: HudCtx) {
     $('btn-biz').onclick = () => this.togglePanel();
@@ -49,8 +54,29 @@ export class Hud implements HudSink {
     };
     tap('btn-interact', () => ctx.interact());
     tap('btn-jump', () => ctx.jump());
-    $('btn-pause').onclick = () => ctx.pause();
-    $('emote-toggle').onclick = () => $('emotes').classList.toggle('open');
+    // ☰ — compact drop-down with everything that isn't needed every second.
+    $('btn-pause').onclick = (e) => { e.stopPropagation(); this.toggleMenu(); };
+    if (!document.fullscreenEnabled) $('hm-fullscreen').classList.add('hidden');
+    $('hud-menu').addEventListener('click', (e) => {
+      const act = (e.target as HTMLElement).closest('button')?.dataset.hm;
+      if (!act) return;
+      this.toggleMenu(false);
+      this.audio.play('ui');
+      if (act === 'biz') this.togglePanel(true);
+      else if (act === 'emotes') $('emotes').classList.add('open');
+      else if (act === 'settings') ctx.pause();
+      else if (act === 'leave') ctx.leave();
+      else if (act === 'fullscreen') {
+        if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+        else void document.documentElement.requestFullscreen?.().catch(() => {});
+      }
+    });
+    // Tap anywhere else closes the menu / emote strip (capture: before the canvas eats the touch).
+    window.addEventListener('pointerdown', (e) => {
+      const t = e.target as HTMLElement;
+      if (!t.closest('.hud-tr')) this.toggleMenu(false);
+      if (!t.closest('#emotes')) $('emotes').classList.remove('open');
+    }, true);
     const em = $('emotes');
     EMOTES.forEach((e, i) => {
       const b = document.createElement('button');
@@ -62,7 +88,11 @@ export class Hud implements HudSink {
     window.addEventListener('keydown', (e) => {
       if (this.root.classList.contains('hidden') || (e.target as HTMLElement)?.tagName === 'INPUT') return;
       if (e.code === 'KeyB' || e.code === 'Tab') { e.preventDefault(); this.togglePanel(); }
-      if (e.code === 'Escape') { if (this.panelOpen) this.togglePanel(false); else ctx.pause(); }
+      if (e.code === 'Escape') {
+        if ($('hud-menu').classList.contains('open')) this.toggleMenu(false);
+        else if (this.panelOpen) this.togglePanel(false);
+        else ctx.pause();
+      }
     });
     $('panel-body').addEventListener('click', (e) => this.onPanelClick(e));
     $('panel-tabs').addEventListener('click', (e) => {
@@ -82,9 +112,21 @@ export class Hud implements HudSink {
     setTimeout(() => em.classList.remove('cooldown'), EMOTE_COOLDOWN_MS);
   }
 
+  private toggleMenu(open = !$('hud-menu').classList.contains('open')) {
+    $('hud-menu').classList.toggle('open', open);
+    $('btn-pause').classList.toggle('on', open);
+  }
+
+  /** Compact connection pill (only while there is a problem). */
+  netStatus(text: string | null) {
+    const el = $('net-status');
+    el.classList.toggle('hidden', !text);
+    if (text) el.textContent = text;
+  }
+
   show(on: boolean) {
     this.root.classList.toggle('hidden', !on);
-    if (!on) { this.togglePanel(false); $('countdown').classList.add('hidden'); this.leader = null; }
+    if (!on) { this.togglePanel(false); this.toggleMenu(false); $('countdown').classList.add('hidden'); this.leader = null; }
   }
 
   openTab(tab: Tab) {
@@ -96,16 +138,20 @@ export class Hud implements HudSink {
   togglePanel(open = !this.panelOpen) {
     this.panelOpen = open;
     $('panel').classList.toggle('hidden', !open);
+    document.body.classList.toggle('panel-open', open);
     if (open) { this.audio.play('ui'); this.lastPanelKey = ''; this.renderPanel(); }
   }
 
   prompt(text: string | null, locked = false) {
     const p = $('prompt');
-    if (!text) { p.classList.add('hidden'); $('btn-interact').classList.remove('ready'); return; }
-    p.textContent = text;
+    // INTERACT is contextual: it only appears next to something you can use.
+    const b = $('btn-interact');
+    if (!text) { p.classList.add('hidden'); b.classList.remove('ready', 'show'); return; }
+    if (p.textContent !== text) p.textContent = text;
     p.classList.toggle('locked', locked);
     p.classList.remove('hidden');
-    $('btn-interact').classList.toggle('ready', !locked);
+    b.classList.add('show');
+    b.classList.toggle('ready', !locked);
   }
 
   toast(text: string, kind: 'info' | 'good' | 'bad' | 'ach' = 'info') {
@@ -114,8 +160,8 @@ export class Hud implements HudSink {
     el.className = `toast ${kind}`;
     el.textContent = text;
     box.prepend(el);
-    while (box.children.length > 4) box.lastChild?.remove();
-    setTimeout(() => el.remove(), kind === 'ach' ? 4000 : 2600);
+    while (box.children.length > toastCap()) box.lastChild?.remove();
+    setTimeout(() => el.remove(), kind === 'ach' ? 3000 : 1900);
   }
 
   achievement(id: AchievementId) {
@@ -138,11 +184,11 @@ export class Hud implements HudSink {
     if (el.innerHTML !== html) { el.innerHTML = html; el.classList.remove('hidden'); this.audio.play('notify'); }
   }
 
-  /** Connection indicator; detailed only in dev mode. */
+  /** Connection indicator: a tiny dot (ping in its tooltip). Problems are shown by netStatus(). */
   setConnection(state: 'ok' | 'warn' | 'bad', text: string) {
     const c = $('hud-conn');
-    c.className = `conn small ${state}`;
-    c.querySelector('span')!.textContent = text;
+    c.className = `conn-dot ${state}`;
+    c.title = text;
   }
 
   private myBiz(room: RoomSnapshot): BusinessState | undefined {
@@ -179,8 +225,8 @@ export class Hud implements HudSink {
     const biz = this.myBiz(room);
     const now = this.net.serverNow();
     if (biz) {
-      $('hud-money').textContent = `💰 $${formatMoney(biz.cash)}`;
-      $('hud-ipm').textContent = `📈 $${formatMoney(this.ctx.ipm(biz.id))}/мин`;
+      setText($('hud-money').lastElementChild as HTMLElement, `$${formatMoney(biz.cash)}`);
+      setText($('hud-ipm').lastElementChild as HTMLElement, `+$${formatMoney(this.ctx.ipm(biz.id))}/мин`);
     }
     const remain = room.status === 'playing' ? Math.max(0, room.endTime - now) : room.status === 'countdown' ? room.endTime - room.startTime : 0;
     const t = `${String(Math.floor(remain / 60000)).padStart(2, '0')}:${String(Math.floor((remain % 60000) / 1000)).padStart(2, '0')}`;
@@ -189,15 +235,15 @@ export class Hud implements HudSink {
     $('vs-card').classList.toggle('hidden', !vs);
     $('tug').classList.toggle('hidden', !vs);
     $('goal-card').classList.toggle('hidden', vs);
-    for (const id of ['hud-timer', 'hud-timer2']) { $(id).textContent = `⏱ ${t}`; $(id).classList.toggle('low', low); }
+    for (const id of ['hud-timer', 'hud-timer2']) { setText($(id), t); $(id).classList.toggle('low', low); }
 
     if (vs) {
       const other = room.players.find((p) => p.id !== this.ctx.myId());
       const ob = other ? room.businesses.find((b) => b.ownerIds.includes(other.id)) : undefined;
       const you = biz?.value ?? 0, opp = ob?.value ?? 0;
-      $('vs-you').textContent = `$${formatMoney(you)}`;
-      $('vs-opp').textContent = `$${formatMoney(opp)}`;
-      $('vs-opp-name').textContent = (other?.name ?? 'OPPONENT').toUpperCase();
+      setText($('vs-you'), `$${formatMoney(you)}`);
+      setText($('vs-opp'), `$${formatMoney(opp)}`);
+      setText($('vs-opp-name'), (other?.name ?? 'RIVAL').toUpperCase());
       const share = you + opp > 0 ? you / (you + opp) : 0.5;
       $('tug-you').style.width = `${Math.round(Math.min(0.97, Math.max(0.03, share)) * 100)}%`;
       // Lead change with hysteresis: needs a 4 % margin and 8 s between banners.
@@ -210,21 +256,16 @@ export class Hud implements HudSink {
         const elapsed = now - room.startTime;
         if (this.leader !== null && room.status === 'playing' && elapsed > 25_000 && performance.now() - this.lastLeadBanner > 8000) {
           this.lastLeadBanner = performance.now();
-          const b = $('lead-banner');
-          b.className = lead === 'you' ? 'you' : 'opp';
-          b.textContent = lead === 'you' ? 'YOU TAKE THE LEAD! 🚀' : 'RIVAL TAKES THE LEAD! 😱';
-          b.classList.remove('hidden');
-          void b.offsetWidth;
-          b.style.animation = 'none'; void b.offsetWidth; b.style.animation = '';
+          // Small toast instead of a screen-wide banner.
+          this.toast(lead === 'you' ? '🚀 YOU TAKE THE LEAD' : '😱 RIVAL TAKES THE LEAD', lead === 'you' ? 'good' : 'bad');
           this.audio.play(lead === 'you' ? 'upgrade' : 'notify');
-          setTimeout(() => b.classList.add('hidden'), 2400);
         }
         this.leader = lead;
       }
     } else if (biz) {
       const pct = Math.min(100, Math.floor((biz.cash / COOP_GOAL.cost) * 100));
       const miss = megaMallMissing(biz).filter((m) => !m.startsWith('$')).length;
-      $('goal-line').textContent = `${room.mode === 'coop' ? '🎯 TEAM GOAL' : '🎯 GOAL'}: ${COOP_GOAL.name} · $${formatMoney(biz.cash)} / $${formatMoney(COOP_GOAL.cost)}${miss ? ` · ещё ${miss} условия` : ''}`;
+      setText($('goal-line'), `${room.mode === 'coop' ? '🎯 TEAM' : '🎯'} ${COOP_GOAL.name} · $${formatMoney(biz.cash)}/$${formatMoney(COOP_GOAL.cost)}${miss ? ` · ещё ${miss}` : ''}`);
       $('goal-fill').style.width = `${pct}%`;
     }
 
@@ -242,22 +283,34 @@ export class Hud implements HudSink {
     if (this.panelOpen) this.renderPanel();
   }
 
+  /**
+   * Events: a short detail toast (~2 s) when the event starts, then only a tiny chip under the VS card
+   * (icon · title · seconds · the one number that matters).
+   */
   private renderEvent(ev: ActiveEvent | null, now: number, room: RoomSnapshot) {
-    const el = $('event-banner');
-    if (!ev) { el.classList.add('hidden'); this.eventKey = ''; return; }
+    const chip = $('event-chip');
+    const banner = $('event-banner');
+    if (!ev) { chip.classList.add('hidden'); banner.classList.add('hidden'); this.eventKey = ''; return; }
     const info = EVENT_INFO[ev.kind];
     const sec = Math.max(0, Math.ceil((ev.endsAt - now) / 1000));
     let extra = '';
     if (ev.kind === 'delivery') {
       const mine = this.myBiz(room);
-      extra = ` · твои ящики: ${mine ? ev.crates?.[mine.id]?.length ?? 0 : 0}`;
+      extra = `📦 ${mine ? ev.crates?.[mine.id]?.length ?? 0 : 0}`;
     }
-    if (ev.kind === 'vip' && ev.reward) extra = ` · платит $${formatMoney(ev.reward)}`;
-    if (ev.kind === 'power') extra = ` · генераторы: ${(ev.switches ?? []).map((t) => (t && now - t < 5000 ? '🟢' : '🔴')).join(' ')}`;
-    el.innerHTML = `${info.icon} ${info.title} · ${sec}с<small>${info.desc}${extra}</small>`;
-    el.classList.remove('hidden');
+    if (ev.kind === 'vip' && ev.reward) extra = `$${formatMoney(ev.reward)}`;
+    if (ev.kind === 'power') extra = (ev.switches ?? []).map((t) => (t && now - t < 5000 ? '🟢' : '🔴')).join('');
+    setHtml(chip, `${info.icon} <b>${info.title}</b> ${sec}с${extra ? ` · ${extra}` : ''}`);
+    chip.classList.remove('hidden');
     const key = `${ev.kind}${ev.startedAt}`;
-    if (key !== this.eventKey) { this.eventKey = key; this.audio.play('event'); }
+    if (key !== this.eventKey) {
+      this.eventKey = key;
+      this.audio.play('event');
+      banner.innerHTML = `${info.icon} ${info.title}<small>${info.desc}</small>`;
+      banner.classList.remove('hidden');
+      clearTimeout(this.eventBannerT);
+      this.eventBannerT = window.setTimeout(() => banner.classList.add('hidden'), 2000);
+    }
   }
 
   // ------------------------------------------------------------ panel
@@ -369,6 +422,10 @@ export class Hud implements HudSink {
     el.disabled = true; // until the authoritative update arrives
   }
 }
+
+/** Touch the DOM only when the text actually changes (5 Hz HUD, no layout churn). */
+function setText(el: HTMLElement, t: string) { if (el.textContent !== t) el.textContent = t; }
+function setHtml(el: HTMLElement, h: string) { if (el.innerHTML !== h) el.innerHTML = h; }
 
 export function esc(s: string) {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);

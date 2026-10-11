@@ -38,14 +38,16 @@ export class World {
     scene.background = horizon;
     scene.fog = new THREE.Fog(horizon, 90, 230);
 
-    const hemi = new THREE.HemisphereLight(0xe8f4ff, 0x8fbf6a, 1.25);
+    // Stylized daylight: cool sky fill + warm ground bounce + a warm, slightly low sun
+    // (longer, readable shadows; shaded sides stay coloured, never black).
+    const hemi = new THREE.HemisphereLight(0xdcecff, 0x9c8f6a, 1.05);
     this.root.add(hemi);
-    this.sun = new THREE.DirectionalLight(0xfff0d8, 2.1);
-    this.sun.position.set(40, 70, 25);
+    this.sun = new THREE.DirectionalLight(0xffe7c4, 2.5);
+    this.sun.position.copy(World.SUN_DIR);
     this.sun.castShadow = q.shadows;
     this.sun.shadow.mapSize.set(q.shadowMap, q.shadowMap);
-    const sc = this.sun.shadow.camera;
-    sc.left = -85; sc.right = 85; sc.top = 60; sc.bottom = -60; sc.near = 10; sc.far = 180;
+    this.sun.shadow.radius = 3;
+    this.setShadowRange(q.shadowRange);
     this.sun.shadow.bias = -0.0004;
     this.sun.shadow.normalBias = 0.03;
     this.root.add(this.sun);
@@ -589,6 +591,29 @@ export class World {
       const id = this.crowd.alloc(randomLook(rnd));
       this.walkers.push({ id, a, b: bb, t: rnd(), speed: 1.2 + rnd() * 0.7, phase: rnd() * 6, wait: 0, forward: rnd() < 0.5, len: a.distanceTo(bb) });
     }
+  }
+
+  static readonly SUN_DIR = new THREE.Vector3(38, 62, 30);
+
+  /** Shadow box size (per preset). */
+  setShadowRange(r: number) {
+    const sc = this.sun.shadow.camera;
+    sc.left = -r; sc.right = r; sc.top = r; sc.bottom = -r; sc.near = 5; sc.far = 160;
+    sc.updateProjectionMatrix();
+    this.shadowTexel = (2 * r) / this.sun.shadow.mapSize.x;
+  }
+  private shadowTexel = 0.1;
+
+  /**
+   * The sun's shadow box follows the player (instead of one blurry map over the whole city),
+   * snapped to whole shadow texels so edges don't shimmer while walking.
+   */
+  followShadow(target: THREE.Vector3) {
+    if (!this.sun.castShadow) return;
+    const s = this.shadowTexel * 2;
+    const x = Math.round(target.x / s) * s, z = Math.round(target.z / s) * s;
+    this.sun.target.position.set(x, 0, z);
+    this.sun.position.set(x + World.SUN_DIR.x, World.SUN_DIR.y, z + World.SUN_DIR.z);
   }
 
   update(dt: number, t: number, camPos: THREE.Vector3) {

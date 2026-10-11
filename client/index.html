@@ -154,48 +154,49 @@
     </div>
   </div>
 
-  <!-- HUD -->
+  <!-- HUD: edges only — the centre of the screen belongs to the 3D game (gameplay safe zone) -->
   <div id="hud" class="hidden">
-    <div class="hud-top">
-      <div class="hud-left">
-        <div class="stat money" id="hud-money">💰 $0</div>
-        <div class="stat small" id="hud-ipm">📈 $0/мин</div>
-      </div>
-      <div class="hud-center" id="hud-center">
-        <div class="vs-card" id="vs-card">
-          <div class="side you"><small>YOU</small><b id="vs-you">$0</b></div>
-          <div class="mid"><div class="timer" id="hud-timer">10:00</div></div>
-          <div class="side opp"><small id="vs-opp-name">OPPONENT</small><b id="vs-opp">$0</b></div>
-        </div>
+    <div class="hud-tl">
+      <div class="stat money" id="hud-money"><i class="ico" data-ico="cash"></i><span>$0</span></div>
+      <div class="stat income" id="hud-ipm"><i class="ico" data-ico="trend"></i><span>$0/мин</span></div>
+    </div>
+    <div class="hud-tc" id="hud-center">
+      <div class="vs-card" id="vs-card">
+        <div class="side you"><small>YOU</small><b id="vs-you">$0</b></div>
+        <div class="mid"><div class="timer" id="hud-timer">10:00</div></div>
+        <div class="side opp"><b id="vs-opp">$0</b><small id="vs-opp-name">RIVAL</small></div>
         <div class="tug" id="tug"><div class="tug-you" id="tug-you"></div></div>
-        <div class="goal-card hidden" id="goal-card"><div class="timer" id="hud-timer2">18:00</div><div class="goal-line" id="goal-line">🎯 TEAM GOAL</div><div class="goal-bar"><div id="goal-fill"></div></div></div>
       </div>
-      <div class="hud-right">
-        <div class="conn small" id="hud-conn"><i></i><span>—</span></div>
-        <button class="icon-btn" id="btn-pause" title="Menu (Esc)">☰</button>
+      <div class="goal-card hidden" id="goal-card"><div class="timer" id="hud-timer2">18:00</div><div class="goal-line" id="goal-line">TEAM GOAL</div><div class="goal-bar"><div id="goal-fill"></div></div></div>
+      <div id="event-chip" class="hidden"></div>
+      <div id="net-status" class="hidden"></div>
+      <div id="opp-wait" class="hidden"></div>
+      <div id="event-banner" class="hidden"></div>
+      <div id="tutorial" class="hidden"></div>
+      <div id="toasts"></div>
+    </div>
+    <div class="hud-tr">
+      <i class="conn-dot" id="hud-conn" title=""></i>
+      <button class="hud-ico" id="btn-pause" aria-label="Меню" title="Menu (Esc)"><i class="ico" data-ico="menu"></i></button>
+      <div class="hud-menu" id="hud-menu">
+        <button data-hm="biz"><i class="ico" data-ico="shop"></i>Бизнес<small>B</small></button>
+        <button data-hm="emotes"><i class="ico" data-ico="smile"></i>Эмоции</button>
+        <button data-hm="settings"><i class="ico" data-ico="gear"></i>Настройки</button>
+        <button data-hm="fullscreen" id="hm-fullscreen"><i class="ico" data-ico="expand"></i>Полный экран</button>
+        <button data-hm="leave" class="danger"><i class="ico" data-ico="exit"></i>Покинуть матч</button>
       </div>
     </div>
     <div id="lead-banner" class="hidden"></div>
-    <div id="event-banner" class="hidden"></div>
-    <div id="tutorial" class="hidden"></div>
-    <div id="opp-wait" class="hidden"></div>
     <div id="prompt" class="hidden"></div>
-    <div id="toasts"></div>
 
-    <div class="hud-bottom">
-      <div class="emote-wrap">
-        <button class="icon-btn emote-toggle" id="emote-toggle">😀</button>
-        <div class="emotes" id="emotes"></div>
-      </div>
-      <button class="btn yellow small hidden" id="btn-adboost">📺 x2 60с</button>
-      <button class="btn biz-btn" id="btn-biz">🏢 <span>БИЗНЕС</span> <small>[B]</small></button>
-    </div>
+    <div class="emotes" id="emotes"></div>
+    <button class="btn yellow small hidden" id="btn-adboost">📺 x2 60с</button>
 
-    <div id="joy-zone"></div>
     <div id="joy-base"><div id="joy-knob"></div></div>
     <div id="touch-buttons">
-      <button class="round-btn interact" id="btn-interact">E</button>
-      <button class="round-btn jump" id="btn-jump">⤒</button>
+      <button class="round-btn biz" id="btn-biz" aria-label="Бизнес"><i class="ico" data-ico="shop"></i><span>БИЗНЕС</span><small>[B]</small></button>
+      <button class="round-btn interact" id="btn-interact" aria-label="Действие"><i class="ico" data-ico="hand"></i></button>
+      <button class="round-btn jump" id="btn-jump" aria-label="Прыжок"><i class="ico" data-ico="jump"></i></button>
     </div>
 
     <div id="panel" class="hidden">
@@ -225,6 +226,11 @@
       <h2>MENU</h2>
       <p class="muted small">Матч не останавливается — это мультиплеер!</p>
       <button class="btn green" data-act="resume">▶ Продолжить</button>
+      <div class="field">Графика
+        <div class="seg" id="pause-quality">
+          <button data-q="auto">AUTO</button><button data-q="low">LOW</button><button data-q="medium">MEDIUM</button><button data-q="high">HIGH</button>
+        </div>
+      </div>
       <div class="row">
         <button class="btn ghost toggle" data-act="toggle-music" id="pause-music">🎵 Музыка</button>
         <button class="btn ghost toggle" data-act="toggle-sfx" id="pause-sfx">🔊 Звуки</button>

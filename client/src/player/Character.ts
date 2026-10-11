@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { blobMesh } from '../world/blob';
 import type { CosmeticId } from '../../../shared/constants/config';
 import { ANIM } from '../../../shared/types/state';
 
@@ -226,7 +227,9 @@ export class Character {
     this.root.add(this.crate);
 
     // Colored ground ring identifies players at a glance.
-    this.ring = new THREE.Mesh(new THREE.RingGeometry(0.75, 1.0, 28), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: isLocal ? 0.95 : 0.65, depthWrite: false }));
+    // Thin, compact ground indicator (was a 2 m ring) + a soft contact shadow.
+    this.root.add(blobMesh(1.3));
+    this.ring = new THREE.Mesh(new THREE.RingGeometry(0.52, 0.64, 32), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: isLocal ? 0.8 : 0.5, depthWrite: false }));
     this.ring.rotation.x = -Math.PI / 2;
     this.ring.position.y = 0.06;
     this.root.add(this.ring);
@@ -243,6 +246,9 @@ export class Character {
     const h = hatMesh(id, this.color);
     if (h) this.hatSlot.add(h);
   }
+
+  /** The local player's own tag is hidden: name/cash are in the HUD and the label covered pads. */
+  showTag(on: boolean) { this.tag.sprite.visible = on; }
 
   setTag(name: string, money: string, color: string) {
     this.tag.draw([{ text: name, color, size: 34 }, { text: money, color: '#fde047', size: 40 }]);

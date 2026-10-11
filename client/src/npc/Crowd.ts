@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { blobGeometry, blobMaterial } from '../world/blob';
 
 // All NPC humans (customers + pedestrians) rendered with 7 InstancedMeshes:
 // adding people costs no extra draw calls. Each person = set of part matrices.
@@ -20,6 +21,8 @@ const PARTS: Part[] = ['torso', 'head', 'hair', 'legL', 'legR', 'armL', 'armR'];
 
 export class Crowd {
   private meshes: Record<Part, THREE.InstancedMesh>;
+  /** Contact shadows for all people: +1 draw call, grounds NPCs even with shadows off. */
+  private blobs: THREE.InstancedMesh;
   private free: number[] = [];
   private m = new THREE.Matrix4();
   private base = new THREE.Matrix4();
@@ -65,6 +68,13 @@ export class Crowd {
       scene.add(im);
       this.meshes[p] = im;
     }
+    this.blobs = new THREE.InstancedMesh(blobGeometry(), blobMaterial(), capacity);
+    this.blobs.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.blobs.frustumCulled = false;
+    this.blobs.renderOrder = -1;
+    for (let i = 0; i < capacity; i++) this.blobs.setMatrixAt(i, this.zero);
+    this.blobs.count = 0;
+    scene.add(this.blobs);
     for (let i = capacity - 1; i >= 0; i--) this.free.push(i);
     for (let i = 0; i < capacity; i++) this.shape.push({ h: 1, w: 1, hair: 0, stride: 1 });
   }
@@ -79,7 +89,7 @@ export class Crowd {
     const i = this.free[k];
     this.free[k] = this.free[this.free.length - 1];
     this.free.pop();
-    if (i > this.hi) { this.hi = i; for (const p of PARTS) this.meshes[p].count = i + 1; }
+    if (i > this.hi) { this.hi = i; for (const p of PARTS) this.meshes[p].count = i + 1; this.blobs.count = i + 1; }
     const set = (p: Part, c: number) => this.meshes[p].setColorAt(i, this.tmpColor.setHex(c));
     set('torso', look.shirt); set('armL', look.shirt); set('armR', look.shirt);
     set('legL', look.pants); set('legR', look.pants);
@@ -94,6 +104,7 @@ export class Crowd {
   release(i: number) {
     if (i < 0) return;
     for (const p of PARTS) this.meshes[p].setMatrixAt(i, this.zero);
+    this.blobs.setMatrixAt(i, this.zero);
     this.free.push(i);
     this.dirty = true;
   }
@@ -122,6 +133,9 @@ export class Crowd {
     set('legR', 0.12, 0.8, 0, -leg);
     set('armL', -0.33, 1.44, 0, armL ?? (armsUp ? -2.6 * armsUp : -leg * 0.9), 0.08);
     set('armR', 0.33, 1.44, 0, armR ?? (armsUp ? -2.6 * armsUp : leg * 0.9), -0.08);
+    const d = 1.05 * scale * sh.w;
+    this.m.makeScale(d, 1, d).setPosition(x, y + 0.03, z);
+    this.blobs.setMatrixAt(i, this.m);
     this.dirty = true;
   }
 
@@ -129,5 +143,6 @@ export class Crowd {
     if (!this.dirty) return;
     this.dirty = false;
     for (const p of PARTS) this.meshes[p].instanceMatrix.needsUpdate = true;
+    this.blobs.instanceMatrix.needsUpdate = true;
   }
 }
