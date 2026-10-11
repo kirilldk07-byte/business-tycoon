@@ -1,0 +1,12 @@
+# ~/.cloudflared/config.yml — fill <TUNNEL_ID> and <HOSTNAME> after `cloudflared tunnel create business-tycoon`.
+# Validate:  ~/bin/cloudflared tunnel --config ~/.cloudflared/config.yml ingress validate
+# Test rule: ~/bin/cloudflared tunnel --config ~/.cloudflared/config.yml ingress rule https://<HOSTNAME>/ws
+tunnel: <TUNNEL_ID>
+credentials-file: /home/kirill/.cloudflared/<TUNNEL_ID>.json
+
+ingress:
+  # Game backend: WebSocket /ws + /health. Cloudflare proxies WebSocket upgrades natively.
+  - hostname: <HOSTNAME>
+    service: http://127.0.0.1:3040
+  # Everything else → 404 (required catch-all as the last rule)
+  - service: http_status:404

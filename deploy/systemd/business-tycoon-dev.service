@@ -1,0 +1,22 @@
+# Business Tycoon — DEV/TEST server (DEV_TOOLS=1, separate data) used by scripts/test-all.sh.
+# Logs: journalctl --user -u business-tycoon-dev -f
+[Unit]
+Description=Business Tycoon game server (dev/test, dev tools ON)
+StartLimitIntervalSec=120
+StartLimitBurst=10
+
+[Service]
+Type=simple
+WorkingDirectory=%h/projects/business-tycoon
+EnvironmentFile=%h/.config/business-tycoon/dev.env
+ExecStart=/usr/bin/node dist/server/index.js
+Restart=always
+RestartSec=2
+KillSignal=SIGTERM
+TimeoutStopSec=10
+NoNewPrivileges=true
+UMask=0077
+SyslogIdentifier=business-tycoon-dev
+
+[Install]
+WantedBy=default.target

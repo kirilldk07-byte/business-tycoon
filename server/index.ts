@@ -6,7 +6,12 @@ import { GameServer } from './networking/GameServer';
 import { FileProfileStore, FileRoomStore } from './persistence/storage';
 import { RoomManager } from './rooms/RoomManager';
 
+// journald adds its own timestamps; keep ours for plain-file logs. Never log tokens/secrets.
 const log = (m: string) => console.log(`[${new Date().toISOString()}] ${m}`);
+const startedAt = Date.now();
+const VERSION = (() => {
+  try { return String(JSON.parse(fs.readFileSync(path.resolve('package.json'), 'utf8')).version); } catch { return 'unknown'; }
+})();
 
 const profiles = new FileProfileStore(ENV.dataDir);
 const rooms = new RoomManager(profiles, new FileRoomStore(ENV.dataDir), ENV.devTools, ENV.maxRooms, log);
@@ -22,6 +27,12 @@ const MIME: Record<string, string> = {
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url ?? '/', 'http://x');
+  // Health check for systemd/monitoring/deploy scripts: no secrets, no player data.
+  if (url.pathname === '/health') {
+    res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+    res.end(JSON.stringify({ status: 'ok', version: VERSION, uptimeSec: Math.round((Date.now() - startedAt) / 1000), devTools: ENV.devTools, ...game.stats }));
+    return;
+  }
   if (url.pathname === '/api/health') {
     res.writeHead(200, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
     res.end(JSON.stringify({ ok: true, devTools: ENV.devTools, ...game.stats }));
@@ -57,16 +68,23 @@ server.on('upgrade', (req, socket, head) => {
   game.handleUpgrade(req, socket, head);
 });
 
+// Graceful shutdown (systemctl stop/restart sends SIGTERM): persist rooms + profiles so a restart
+// keeps matches resumable (clients reconnect within the 45 s grace window), then exit.
+let stopping = false;
+const shutdown = (sig: string) => {
+  if (stopping) return;
+  stopping = true;
+  log(`${sig} received — saving state and shutting down`);
+  try { rooms.stop(); profiles.flush(); } catch (e) { log(`shutdown save failed: ${(e as Error).message}`); }
+  server.close();
+  for (const ws of game.clients()) ws.close(1012, 'server restart');
+  setTimeout(() => process.exit(0), 300).unref();
+};
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+
 rooms.start(ENV.snapshotIntervalMs);
 server.listen(ENV.port, ENV.host, () => {
   log(`Business Tycoon server on http://${ENV.host}:${ENV.port}  ws path /ws  devTools=${ENV.devTools}`);
 });
 
-function shutdown(sig: string) {
-  log(`${sig}: saving rooms and shutting down`);
-  rooms.stop();
-  server.close();
-  setTimeout(() => process.exit(0), 300);
-}
-process.on('SIGINT', () => shutdown('SIGINT'));
-process.on('SIGTERM', () => shutdown('SIGTERM'));

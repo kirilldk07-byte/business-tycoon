@@ -27,6 +27,7 @@ export const randomToken = (bytes = 24) => crypto.randomBytes(bytes).toString('h
 
 class JsonFile<T> {
   private timer: NodeJS.Timeout | null = null;
+  private pending: (() => T) | null = null;
   constructor(private file: string, private fallback: T) {}
   read(): T {
     try { return JSON.parse(fs.readFileSync(this.file, 'utf8')) as T; } catch { return this.fallback; }
@@ -39,8 +40,18 @@ class JsonFile<T> {
     fs.renameSync(tmp, this.file);
   }
   writeSoon(get: () => T, delay = 1000) {
+    this.pending = get;
     if (this.timer) return;
-    this.timer = setTimeout(() => { this.timer = null; this.writeNow(get()); }, delay);
+    this.timer = setTimeout(() => { this.timer = null; this.pending = null; this.writeNow(get()); }, delay);
+  }
+  /** Write a debounced change right now (graceful shutdown). */
+  flush() {
+    if (!this.timer || !this.pending) return;
+    clearTimeout(this.timer);
+    this.timer = null;
+    const get = this.pending;
+    this.pending = null;
+    this.writeNow(get());
   }
 }
 
@@ -77,6 +88,7 @@ export class FileProfileStore implements ProfileStore {
       .sort((a, b) => b.wins - a.wins || b.rating - a.rating).slice(0, n);
   }
   private persist() { this.file.writeSoon(() => this.data); }
+  flush() { this.file.flush(); }
 }
 
 export class FileRoomStore implements RoomStore {

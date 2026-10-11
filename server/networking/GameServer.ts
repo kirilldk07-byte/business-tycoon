@@ -77,8 +77,15 @@ export class GameServer {
     }, 10_000);
   }
 
+  /** Origins seen so far — each new one is logged once (to fill ALLOWED_ORIGINS from real traffic). */
+  private seenOrigins = new Set<string>();
+
   handleUpgrade(req: IncomingMessage, socket: import('node:stream').Duplex, head: Buffer) {
     const origin = req.headers.origin ?? '';
+    if (!this.seenOrigins.has(origin) && this.seenOrigins.size < 200) {
+      this.seenOrigins.add(origin);
+      this.opts.log(`new WebSocket origin: ${origin || '(none)'}`);
+    }
     if (this.opts.allowedOrigins.length && !this.opts.allowedOrigins.some((o) => origin === o || (o.startsWith('*.') && origin.endsWith(o.slice(1))))) {
       this.opts.log(`rejected origin ${origin}`);
       socket.destroy();
@@ -281,6 +288,9 @@ export class GameServer {
       this.opts.log(`quick match: paired ${pair[0].name} vs ${pair[1].name} in ${room.code}`);
     }
   }
+
+  /** Open sockets (graceful shutdown closes them with 1012 "service restart" → clients reconnect). */
+  clients() { return [...this.wss.clients]; }
 
   get stats() {
     return { connections: this.wss.clients.size, rooms: this.rooms.rooms.size, queue: this.queue.size, tickHz: MATCH.serverTickHz };

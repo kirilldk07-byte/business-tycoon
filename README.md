@@ -125,8 +125,8 @@ Dev-панель (`?dev=1` + сервер с `DEV_TOOLS=1`): +деньги, ст
 
 ## Тесты
 ```bash
-WS_URL=ws://<host>:3041/ws bash scripts/test-all.sh          # всё: typecheck + e2e (0/150 мс) + coop + security + grace (45 с)
-WS_URL=ws://<host>:3041/ws bash scripts/test-all.sh --quick  # без 45-секундного grace-теста
+WS_URL=ws://127.0.0.1:3041/ws bash scripts/test-all.sh     # всё: typecheck + e2e (0/150 мс) + coop + security + grace (45 с)
+WS_URL=ws://127.0.0.1:3041/ws bash scripts/test-all.sh --quick  # без 45-секундного grace-теста
 WS_URL=... LATENCY=200 npx tsx scripts/e2e.ts                # плохая сеть
 WS_URL=... PROD_WS_URL=ws://<host>:3040/ws npx tsx scripts/security-e2e.ts   # + проверка, что prod отклоняет dev-команды
 npm run test:balance                                          # таймлайн экономики
@@ -262,3 +262,23 @@ Production URL: **https://kirilldk07-byte.github.io/business-tycoon/** (серв
 6. После первого запуска черновика можно включить на сервере `ALLOWED_ORIGINS` (origin игры виден в логе подключений) — сейчас сервер принимает любые Origin.
 
 SDK-интеграция (`client/src/platform/Yandex.ts`): `YaGames.init`, `LoadingAPI.ready`, `GameplayAPI.start/stop` (матч; меню паузы; реклама), события `game_api_pause/resume` (звук + ввод), облачное сохранение профиля (`player.setData/getData`), лидерборд `ysdk.leaderboards`, реклама только между матчами / rewarded в соло. Без SDK игра работает автономно.
+
+## PRODUCTION BACKEND SETUP
+
+Подробная пошаговая инструкция (домен → Cloudflare → Named Tunnel → ZIP → CSP → модерация): **[docs/PRODUCTION_DEPLOY.md](docs/PRODUCTION_DEPLOY.md)**.
+
+| Что | Как |
+|---|---|
+| **systemd** | `business-tycoon.service` (prod, `127.0.0.1:3040`, DEV_TOOLS=0) и `business-tycoon-dev.service` (тесты, `127.0.0.1:3041`) — user units в `~/.config/systemd/user/`, исходники в `deploy/systemd/`. `Restart=always`, linger → старт после перезагрузки. Установка/обновление: `bash scripts/install-services.sh` |
+| **env** | `~/.config/business-tycoon/{prod,dev}.env` (600), шаблоны `deploy/env/*.example`. Секретов нет; `ALLOWED_ORIGINS` меняется без правки кода |
+| **domain / DNS** | `game.<домен>` на Cloudflare DNS; CNAME создаёт `cloudflared tunnel route dns` |
+| **Cloudflare Named Tunnel** | `cloudflared-tunnel.service` (user unit, `~/.cloudflared/config.yml`, шаблон `deploy/cloudflared/config.yml.template`), ingress → `http://127.0.0.1:3040`, последний правило `http_status:404` |
+| **WSS** | `wss://game.<домен>/ws` (Cloudflare проксирует WebSocket; сервер пингует каждые 10 с) |
+| **health** | `curl http://127.0.0.1:3040/health` → `{"status":"ok","version",...}` (без секретов и данных игроков) |
+| **logs** | `journalctl --user -u business-tycoon -f` (токены/секреты не логируются; новые WebSocket-origin'ы пишутся один раз) |
+| **restart** | `systemctl --user restart business-tycoon` — SIGTERM: комнаты и профили сохраняются, клиенты переподключаются (grace 45 с) |
+| **deploy** | `bash scripts/deploy-production.sh` — deps при смене lockfile → typecheck → build → restart → /health → откат при сбое |
+| **проверка** | `bash scripts/check-production.sh [wss://game.<домен>/ws]` — сервис, автозапуск, health, WS/WSS, конфиг клиента, ZIP, секреты |
+| **Yandex packaging** | `VITE_WS_URL=wss://game.<домен>/ws bash scripts/pack-yandex.sh` — отклоняет ws://, localhost, IP, порт, плейсхолдер, `trycloudflare.com`. Для черновика до домена: `YANDEX_TEST_BUILD=1` → `dist/yandex-game.DRAFT-TEST.zip` (не для модерации) |
+
+Временный quick tunnel (`scripts/start-tunnel.sh`, `*.trycloudflare.com`) работает до перехода на Named Tunnel; его адрес меняется при перезапуске, поэтому для публикации он не годится.

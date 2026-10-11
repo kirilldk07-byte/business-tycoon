@@ -1,0 +1,25 @@
+# Business Tycoon — PRODUCTION game server (user-level systemd unit, runs as the project user, not root).
+# Install: bash scripts/install-services.sh   (copies to ~/.config/systemd/user/, enables, starts)
+# Logs:    journalctl --user -u business-tycoon -f
+# Survives reboot because lingering is enabled for the user (loginctl enable-linger <user>).
+[Unit]
+Description=Business Tycoon multiplayer game server (production)
+StartLimitIntervalSec=120
+StartLimitBurst=10
+
+[Service]
+Type=simple
+WorkingDirectory=%h/projects/business-tycoon
+EnvironmentFile=%h/.config/business-tycoon/prod.env
+ExecStart=/usr/bin/node dist/server/index.js
+Restart=always
+RestartSec=2
+# SIGTERM → server saves live rooms + profiles, closes sockets with 1012, exits (clients reconnect within grace)
+KillSignal=SIGTERM
+TimeoutStopSec=10
+NoNewPrivileges=true
+UMask=0077
+SyslogIdentifier=business-tycoon
+
+[Install]
+WantedBy=default.target
