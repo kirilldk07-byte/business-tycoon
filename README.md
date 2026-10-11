@@ -281,4 +281,4 @@ SDK-интеграция (`client/src/platform/Yandex.ts`): `YaGames.init`, `Loa
 | **проверка** | `bash scripts/check-production.sh [wss://game.<домен>/ws]` — сервис, автозапуск, health, WS/WSS, конфиг клиента, ZIP, секреты |
 | **Yandex packaging** | `VITE_WS_URL=wss://game.<домен>/ws bash scripts/pack-yandex.sh` — отклоняет ws://, localhost, IP, порт, плейсхолдер, `trycloudflare.com`. Для черновика до домена: `YANDEX_TEST_BUILD=1` → `dist/yandex-game.DRAFT-TEST.zip` (не для модерации) |
 
-Временный quick tunnel (`scripts/start-tunnel.sh`, `*.trycloudflare.com`) работает до перехода на Named Tunnel; его адрес меняется при перезапуске, поэтому для публикации он не годится.
+**Production сейчас:** `wss://game.businesstycoon.ru/ws` через Cloudflare Named Tunnel `business-tycoon` (`cloudflared-tunnel.service`). Временный quick tunnel (`scripts/start-tunnel.sh`, `*.trycloudflare.com`) остановлен и оставлен только как запасной вариант для отладки — для публикации не годится.

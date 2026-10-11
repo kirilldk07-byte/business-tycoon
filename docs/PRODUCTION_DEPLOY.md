@@ -15,6 +15,18 @@ cloudflared-tunnel.service  (systemd --user)
 business-tycoon.service     (systemd --user, Node, только loopback)
 ```
 
+## Текущий production (2026-10-11)
+
+| | |
+|---|---|
+| Backend | `wss://game.businesstycoon.ru/ws` · health `https://game.businesstycoon.ru/health` |
+| Named Tunnel | `business-tycoon` (ID `62a938dc-0fc9-4792-ac0c-9804a6ed2f6b`), config `~/.cloudflared/config.yml`, credentials `~/.cloudflared/<ID>.json` (600, не в git) |
+| Сервисы | `business-tycoon` + `cloudflared-tunnel` (systemd --user, enabled, linger) |
+| Веб-версия | GitHub Pages → `config.json` = `wss://game.businesstycoon.ru/ws` |
+| Временный quick tunnel | остановлен (больше не нужен) |
+
+Шаги 1–5 ниже уже выполнены; для релиза осталось 6–10.
+
 `game.DOMAIN.TLD` ниже — **плейсхолдер**. Везде подставь свой поддомен, например `game.mytycoon.ru`.
 `pack-yandex.sh` откажется собирать архив с плейсхолдером, `example.com`, IP, портом, `localhost` или `trycloudflare.com`.
 

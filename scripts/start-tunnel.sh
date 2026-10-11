@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# LEGACY: temporary Cloudflare quick tunnel (*.trycloudflare.com). Production uses the named tunnel
+# (cloudflared-tunnel.service, wss://game.businesstycoon.ru/ws). Do not use this for Yandex builds.
 # Expose the local game server (PORT, default 3040) over HTTPS/WSS with a
 # Cloudflare quick tunnel and republish GitHub Pages with the new address.
 # Quick-tunnel URLs change on every restart; for a permanent address use a
